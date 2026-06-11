@@ -71,7 +71,7 @@ jobs:
 
       - name: Build macOS release
         working-directory: frontend
-        run: flutter build macos --release --no-codesign
+        run: flutter build macos --release -- CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
 
       - name: Package .app bundle
         working-directory: frontend/build/macos/Build/Products/Release
