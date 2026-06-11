@@ -1,15 +1,18 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # IMLiti – Build & Release macOS + Windows
-# Triggered manually with a version input (e.g. "1.0.2")
+# Triggered manually with a version input or automatically on push to main
 # ─────────────────────────────────────────────────────────────────────────────
 name: Release Desktop Apps
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       version:
         description: "Release version (e.g. 1.0.2)"
-        required: true
+        required: false
         type: string
 
 permissions:
@@ -26,9 +29,23 @@ jobs:
   # ═════════════════════════════════════════════════════════════════════════════
   build-macos:
     runs-on: macos-latest
+    outputs:
+      version: ${{ steps.version_step.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set Version
+        id: version_step
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION=$(grep '^version: ' frontend/pubspec.yaml | sed 's/version: //' | cut -d'+' -f1)
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: $VERSION"
 
       - name: Install Flutter 3.41.5
         run: |
@@ -46,7 +63,7 @@ jobs:
       - name: Bump version
         working-directory: frontend
         run: |
-          sed -i '' -E "s/^version: [0-9]+\.[0-9]+\.[0-9]+\+[0-9]+/version: ${{ inputs.version }}+1/" pubspec.yaml
+          sed -i '' -E "s/^version: [0-9]+\.[0-9]+\.[0-9]+\+[0-9]+/version: ${{ env.VERSION }}+1/" pubspec.yaml
 
       - name: Install dependencies
         working-directory: frontend
@@ -60,34 +77,54 @@ jobs:
         working-directory: frontend/build/macos/Build/Products/Release
         run: |
           APP_BUNDLE=$(find . -maxdepth 1 -name "*.app" | head -1)
-          zip -r --symlinks /tmp/imliti-${{ inputs.version }}-macos.zip "$APP_BUNDLE"
-          echo "ZIP_SIZE=$(du -sh /tmp/imliti-${{ inputs.version }}-macos.zip | cut -f1)" >> "$GITHUB_ENV"
+          zip -r --symlinks /tmp/imliti-${{ env.VERSION }}-macos.zip "$APP_BUNDLE"
+          echo "ZIP_SIZE=$(du -sh /tmp/imliti-${{ env.VERSION }}-macos.zip | cut -f1)" >> "$GITHUB_ENV"
 
       - name: Upload to S3
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
-          aws s3 cp /tmp/imliti-${{ inputs.version }}-macos.zip \
-            "s3://$S3_BUCKET/app/macos/imliti-${{ inputs.version }}.zip" \
+          aws s3 cp /tmp/imliti-${{ env.VERSION }}-macos.zip \
+            "s3://$S3_BUCKET/app/macos/imliti-${{ env.VERSION }}.zip" \
             --region $AWS_REGION \
             --content-type "application/zip"
 
       - name: Output download URL
         run: |
           echo "### ✅ macOS build uploaded" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Version:** ${{ inputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Version:** ${{ env.VERSION }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Size:** $ZIP_SIZE" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **URL:** https://$S3_BUCKET.s3.$AWS_REGION.amazonaws.com/app/macos/imliti-${{ inputs.version }}.zip" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **URL:** https://$S3_BUCKET.s3.$AWS_REGION.amazonaws.com/app/macos/imliti-${{ env.VERSION }}.zip" >> "$GITHUB_STEP_SUMMARY"
 
   # ═════════════════════════════════════════════════════════════════════════════
   #  Windows build
   # ═════════════════════════════════════════════════════════════════════════════
   build-windows:
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version_step.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set Version
+        id: version_step
+        shell: pwsh
+        run: |
+          if ("${{ github.event.inputs.version }}" -ne "") {
+            $version = "${{ github.event.inputs.version }}"
+          } else {
+            $pubspec = Get-Content frontend/pubspec.yaml -Raw
+            if ($pubspec -match 'version:\s*([^\+\s]+)') {
+              $version = $Matches[1]
+            } else {
+              $version = "1.0.1"
+            }
+          }
+          echo "VERSION=$version" >> $env:GITHUB_ENV
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Resolved version: $version"
 
       - name: Install Flutter 3.41.5
         shell: pwsh
@@ -107,7 +144,7 @@ jobs:
         shell: pwsh
         run: |
           $content = Get-Content pubspec.yaml -Raw
-          $content = $content -replace 'version: \d+\.\d+\.\d+\+\d+', "version: ${{ inputs.version }}+1"
+          $content = $content -replace 'version: \d+\.\d+\.\d+\+\d+', "version: ${{ env.VERSION }}+1"
           Set-Content pubspec.yaml -Value $content -NoNewline
 
       - name: Install dependencies
@@ -122,7 +159,7 @@ jobs:
         shell: pwsh
         run: |
           $releaseDir = "frontend/build/windows/x64/runner/Release"
-          $zipPath = "$env:TEMP/imliti-${{ inputs.version }}-windows.zip"
+          $zipPath = "$env:TEMP/imliti-${{ env.VERSION }}-windows.zip"
           Compress-Archive -Path "$releaseDir/*" -DestinationPath $zipPath -Force
           $sizeMB = [math]::Round((Get-Item $zipPath).Length / 1MB, 1)
           echo "ZIP_PATH=$zipPath" >> $env:GITHUB_ENV
@@ -135,7 +172,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           aws s3 cp "$ZIP_PATH" \
-            "s3://$S3_BUCKET/app/windows/imliti-${{ inputs.version }}.zip" \
+            "s3://$S3_BUCKET/app/windows/imliti-${{ env.VERSION }}.zip" \
             --region $AWS_REGION \
             --content-type "application/zip"
 
@@ -143,9 +180,9 @@ jobs:
         shell: bash
         run: |
           echo "### ✅ Windows build uploaded" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Version:** ${{ inputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Version:** ${{ env.VERSION }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Size:** $ZIP_SIZE" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **URL:** https://$S3_BUCKET.s3.$AWS_REGION.amazonaws.com/app/windows/imliti-${{ inputs.version }}.zip" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **URL:** https://$S3_BUCKET.s3.$AWS_REGION.amazonaws.com/app/windows/imliti-${{ env.VERSION }}.zip" >> "$GITHUB_STEP_SUMMARY"
 
   # ═════════════════════════════════════════════════════════════════════════════
   #  Update latest.json manifest (runs after both builds succeed)
@@ -158,6 +195,7 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          VERSION: ${{ needs.build-macos.outputs.version }}
         run: |
           MANIFEST_KEY="app/latest.json"
           EXISTING=$(aws s3 cp "s3://$S3_BUCKET/$MANIFEST_KEY" - --region $AWS_REGION 2>/dev/null || echo '{}')
@@ -166,10 +204,10 @@ jobs:
           NEW_MANIFEST=$(python3 - <<PYEOF
           import json
           manifest = {
-              "version": "${{ inputs.version }}",
+              "version": "${{ env.VERSION }}",
               "notes": "${NOTES}",
-              "macos": "https://${{ env.S3_BUCKET }}.s3.${{ env.AWS_REGION }}.amazonaws.com/app/macos/imliti-${{ inputs.version }}.zip",
-              "windows": "https://${{ env.S3_BUCKET }}.s3.${{ env.AWS_REGION }}.amazonaws.com/app/windows/imliti-${{ inputs.version }}.zip",
+              "macos": "https://${{ env.S3_BUCKET }}.s3.${{ env.AWS_REGION }}.amazonaws.com/app/macos/imliti-${{ env.VERSION }}.zip",
+              "windows": "https://${{ env.S3_BUCKET }}.s3.${{ env.AWS_REGION }}.amazonaws.com/app/windows/imliti-${{ env.VERSION }}.zip",
           }
           print(json.dumps(manifest, indent=2))
           PYEOF
