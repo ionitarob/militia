@@ -160,7 +160,7 @@ jobs:
         working-directory: frontend
         run: flutter build windows --release
 
-      - name: Package release
+      - name: Package release (ZIP for auto-update)
         shell: pwsh
         run: |
           $releaseDir = (Get-Item "frontend/build/windows/x64/runner/Release").FullName
@@ -182,24 +182,40 @@ jobs:
           echo "ZIP_PATH=$zipPath" >> $env:GITHUB_ENV
           echo "ZIP_SIZE=${sizeMB}MB" >> $env:GITHUB_ENV
 
+      - name: Compile Windows Installer (.exe)
+        shell: pwsh
+        run: |
+          & "iscc" /DMyAppVersion="${{ env.VERSION }}" frontend/windows/installer.iss
+          $setupPath = "frontend/windows/imliti-${{ env.VERSION }}-setup.exe"
+          $sizeMB = [math]::Round((Get-Item $setupPath).Length / 1MB, 1)
+          echo "SETUP_PATH=$setupPath" >> $env:GITHUB_ENV
+          echo "SETUP_SIZE=${sizeMB}MB" >> $env:GITHUB_ENV
+
       - name: Upload to S3
         shell: bash
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
+          # Upload ZIP for auto-updater
           aws s3 cp "$ZIP_PATH" \
             "s3://$S3_BUCKET/app/windows/imliti-${{ env.VERSION }}.zip" \
             --region $AWS_REGION \
             --content-type "application/zip"
+
+          # Upload EXE Installer
+          aws s3 cp "$SETUP_PATH" \
+            "s3://$S3_BUCKET/app/windows/imliti-${{ env.VERSION }}-setup.exe" \
+            --region $AWS_REGION \
+            --content-type "application/octet-stream"
 
       - name: Output download URL
         shell: bash
         run: |
           echo "### ✅ Windows build uploaded" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Version:** ${{ env.VERSION }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Size:** $ZIP_SIZE" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **URL:** https://$S3_BUCKET.s3.$AWS_REGION.amazonaws.com/app/windows/imliti-${{ env.VERSION }}.zip" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Installer EXE:** https://$S3_BUCKET.s3.$AWS_REGION.amazonaws.com/app/windows/imliti-${{ env.VERSION }}-setup.exe ($SETUP_SIZE)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Auto-update ZIP:** https://$S3_BUCKET.s3.$AWS_REGION.amazonaws.com/app/windows/imliti-${{ env.VERSION }}.zip ($ZIP_SIZE)" >> "$GITHUB_STEP_SUMMARY"
 
   # ═════════════════════════════════════════════════════════════════════════════
   #  Update latest.json manifest (runs after both builds succeed)
