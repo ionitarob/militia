@@ -18,6 +18,7 @@ permissions:
 env:
   AWS_REGION: eu-west-3
   S3_BUCKET: imliti-scrapes-340303438174
+  FLUTTER_BASE: https://storage.googleapis.com/flutter_infra_release/releases
 
 jobs:
   # ═════════════════════════════════════════════════════════════════════════════
@@ -29,16 +30,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Flutter
+      - name: Install Flutter 3.41.5
         run: |
-          git clone https://github.com/flutter/flutter.git -b 3.41.5 --depth 1 "$HOME/flutter"
+          curl -fsSL -o /tmp/flutter.zip \
+            "$FLUTTER_BASE/stable/macos/flutter_macos_arm64_3.41.5-stable.zip"
+          unzip -q /tmp/flutter.zip -d "$HOME"
           echo "$HOME/flutter/bin" >> "$GITHUB_PATH"
+          rm /tmp/flutter.zip
 
-      - name: Flutter doctor
+      - name: Verify Flutter
         run: |
-          export PATH="$HOME/flutter/bin:$PATH"
-          flutter doctor -v
           flutter --version
+          dart --version
 
       - name: Bump version
         working-directory: frontend
@@ -86,18 +89,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Flutter
-        shell: bash
+      - name: Install Flutter 3.41.5
+        shell: pwsh
         run: |
-          git clone https://github.com/flutter/flutter.git -b 3.41.5 --depth 1 "C:/flutter"
-          echo "C:/flutter/bin" >> "$GITHUB_PATH"
+          Invoke-WebRequest -Uri "$env:FLUTTER_BASE/stable/windows/flutter_windows_3.41.5-stable.zip" -OutFile "$env:TEMP\flutter.zip"
+          Expand-Archive -Path "$env:TEMP\flutter.zip" -DestinationPath "C:\" -Force
+          echo "C:\flutter\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          Remove-Item "$env:TEMP\flutter.zip"
 
-      - name: Flutter doctor
-        shell: bash
+      - name: Verify Flutter
         run: |
-          export PATH="C:/flutter/bin:$PATH"
-          flutter doctor -v
           flutter --version
+          dart --version
 
       - name: Bump version
         working-directory: frontend
