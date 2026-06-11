@@ -18,7 +18,7 @@ permissions:
 env:
   AWS_REGION: eu-west-3
   S3_BUCKET: imliti-scrapes-340303438174
-  FLUTTER_VERSION: "3.29.3"           # pin to your current stable channel
+  FLUTTER_VERSION: "3.41.5"           # ships with Dart 3.11.3
 
 jobs:
   # ═════════════════════════════════════════════════════════════════════════════
