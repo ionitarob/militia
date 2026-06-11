@@ -1,0 +1,48 @@
+# ── OS ──────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+
+# ── IDEs ────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# ── Flutter / Dart ──────────────────────────────────────────────────────
+frontend/.dart_tool/
+frontend/.flutter-plugins-dependencies
+frontend/.pub-cache/
+frontend/.pub/
+frontend/build/
+frontend/.flutter-plugins
+frontend/.packages
+
+# ── macOS Pods (large; restored by `pod install`) ───────────────────────
+frontend/macos/Pods/
+frontend/macos/.symlinks/
+
+# ── Windows build artifacts ─────────────────────────────────────────────
+frontend/windows/flutter/ephemeral/
+
+# ── Infra / CDK ─────────────────────────────────────────────────────────
+infra/node_modules/
+infra/cdk.out/
+infra/.cdk.staging/
+infra/*.js
+!infra/jest.config.js
+infra/*.d.ts
+
+# ── Python ──────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+
+# ── Agent / AI tool dirs ────────────────────────────────────────────────
+.gemini/
+.claude/
+.agents/
+.antigravityignore
+
+# ── Misc ────────────────────────────────────────────────────────────────
+*.log

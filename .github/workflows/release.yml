@@ -1,0 +1,163 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# IMLiti – Build & Release macOS + Windows
+# Triggered manually with a version input (e.g. "1.0.2")
+# ─────────────────────────────────────────────────────────────────────────────
+name: Release Desktop Apps
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 1.0.2)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: eu-west-3
+  S3_BUCKET: imliti-scrapes-340303438174
+  FLUTTER_VERSION: "3.29.3"           # pin to your current stable channel
+
+jobs:
+  # ═════════════════════════════════════════════════════════════════════════════
+  #  macOS build
+  # ═════════════════════════════════════════════════════════════════════════════
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+
+      - name: Bump version
+        working-directory: frontend
+        run: |
+          sed -i '' -E "s/^version: [0-9]+\.[0-9]+\.[0-9]+\+[0-9]+/version: ${{ inputs.version }}+1/" pubspec.yaml
+
+      - name: Build macOS release
+        working-directory: frontend
+        run: flutter build macos --release
+
+      - name: Package .app bundle
+        working-directory: frontend/build/macos/Build/Products/Release
+        run: |
+          APP_BUNDLE=$(find . -maxdepth 1 -name "*.app" | head -1)
+          zip -r --symlinks /tmp/imliti-${{ inputs.version }}-macos.zip "$APP_BUNDLE"
+          echo "ZIP_SIZE=$(du -sh /tmp/imliti-${{ inputs.version }}-macos.zip | cut -f1)" >> "$GITHUB_ENV"
+
+      - name: Upload to S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          aws s3 cp /tmp/imliti-${{ inputs.version }}-macos.zip \
+            "s3://$S3_BUCKET/app/macos/imliti-${{ inputs.version }}.zip" \
+            --region $AWS_REGION \
+            --content-type "application/zip"
+
+      - name: Output download URL
+        run: |
+          echo "### ✅ macOS build uploaded" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Version:** ${{ inputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Size:** $ZIP_SIZE" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **URL:** https://$S3_BUCKET.s3.$AWS_REGION.amazonaws.com/app/macos/imliti-${{ inputs.version }}.zip" >> "$GITHUB_STEP_SUMMARY"
+
+  # ═════════════════════════════════════════════════════════════════════════════
+  #  Windows build
+  # ═════════════════════════════════════════════════════════════════════════════
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+
+      - name: Bump version
+        working-directory: frontend
+        shell: pwsh
+        run: |
+          $content = Get-Content pubspec.yaml -Raw
+          $content = $content -replace 'version: \d+\.\d+\.\d+\+\d+', "version: ${{ inputs.version }}+1"
+          Set-Content pubspec.yaml -Value $content -NoNewline
+
+      - name: Build Windows release
+        working-directory: frontend
+        run: flutter build windows --release
+
+      - name: Package release
+        shell: pwsh
+        run: |
+          $releaseDir = "frontend/build/windows/x64/runner/Release"
+          $zipPath = "$env:TEMP/imliti-${{ inputs.version }}-windows.zip"
+          Compress-Archive -Path "$releaseDir/*" -DestinationPath $zipPath -Force
+          $sizeMB = [math]::Round((Get-Item $zipPath).Length / 1MB, 1)
+          echo "ZIP_PATH=$zipPath" >> $env:GITHUB_ENV
+          echo "ZIP_SIZE=${sizeMB}MB" >> $env:GITHUB_ENV
+
+      - name: Upload to S3
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          aws s3 cp "$ZIP_PATH" \
+            "s3://$S3_BUCKET/app/windows/imliti-${{ inputs.version }}.zip" \
+            --region $AWS_REGION \
+            --content-type "application/zip"
+
+      - name: Output download URL
+        shell: bash
+        run: |
+          echo "### ✅ Windows build uploaded" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Version:** ${{ inputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Size:** $ZIP_SIZE" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **URL:** https://$S3_BUCKET.s3.$AWS_REGION.amazonaws.com/app/windows/imliti-${{ inputs.version }}.zip" >> "$GITHUB_STEP_SUMMARY"
+
+  # ═════════════════════════════════════════════════════════════════════════════
+  #  Update latest.json manifest (runs after both builds succeed)
+  # ═════════════════════════════════════════════════════════════════════════════
+  update-manifest:
+    runs-on: ubuntu-latest
+    needs: [build-macos, build-windows]
+    steps:
+      - name: Update latest.json
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          MANIFEST_KEY="app/latest.json"
+          EXISTING=$(aws s3 cp "s3://$S3_BUCKET/$MANIFEST_KEY" - --region $AWS_REGION 2>/dev/null || echo '{}')
+          NOTES=$(echo "$EXISTING" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('notes',''))" 2>/dev/null || echo "")
+
+          NEW_MANIFEST=$(python3 - <<PYEOF
+          import json
+          manifest = {
+              "version": "${{ inputs.version }}",
+              "notes": "${NOTES}",
+              "macos": "https://${{ env.S3_BUCKET }}.s3.${{ env.AWS_REGION }}.amazonaws.com/app/macos/imliti-${{ inputs.version }}.zip",
+              "windows": "https://${{ env.S3_BUCKET }}.s3.${{ env.AWS_REGION }}.amazonaws.com/app/windows/imliti-${{ inputs.version }}.zip",
+          }
+          print(json.dumps(manifest, indent=2))
+          PYEOF
+          )
+
+          echo "$NEW_MANIFEST" | aws s3 cp - "s3://$S3_BUCKET/$MANIFEST_KEY" \
+            --region $AWS_REGION \
+            --content-type "application/json"
+
+          echo "### 📋 Manifest updated" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          echo "$NEW_MANIFEST" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
