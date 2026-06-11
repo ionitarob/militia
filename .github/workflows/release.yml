@@ -163,7 +163,7 @@ jobs:
       - name: Package release
         shell: pwsh
         run: |
-          $releaseDir = "frontend/build/windows/x64/runner/Release"
+          $releaseDir = (Get-Item "frontend/build/windows/x64/runner/Release").FullName
           $zipPath = "$env:TEMP/imliti-${{ env.VERSION }}-windows.zip"
           if (Test-Path $zipPath) { Remove-Item $zipPath }
           Add-Type -AssemblyName System.IO.Compression.FileSystem
