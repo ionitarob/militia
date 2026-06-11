@@ -71,7 +71,7 @@ jobs:
 
       - name: Build macOS release
         working-directory: frontend
-        run: flutter build macos --release
+        run: flutter build macos --release --no-codesign
 
       - name: Package .app bundle
         working-directory: frontend/build/macos/Build/Products/Release
