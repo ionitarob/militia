@@ -3,7 +3,7 @@
   #define MyAppVersion "1.0.1"
 #endif
 #define MyAppPublisher "IMLiti"
-#define MyAppExeName "frontend.exe"
+#define MyAppExeName "IMLiti.exe"
 
 [Setup]
 AppId={{C151B17A-A19F-4D2A-9492-B7DFB9D907E2}
