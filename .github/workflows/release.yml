@@ -69,12 +69,13 @@ jobs:
         working-directory: frontend
         run: flutter pub get
 
+      - name: Disable code signing
+        run: |
+          sed -i '' -E 's/DEVELOPMENT_TEAM = [A-Z0-9]+;/DEVELOPMENT_TEAM = "";/g' frontend/macos/Runner.xcodeproj/project.pbxproj
+          sed -i '' -E 's/"CODE_SIGN_IDENTITY\[sdk=macosx\*\]" = "[^"]+";/"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";/g' frontend/macos/Runner.xcodeproj/project.pbxproj
+
       - name: Build macOS release
         working-directory: frontend
-        env:
-          CODE_SIGN_IDENTITY: ""
-          CODE_SIGNING_REQUIRED: "NO"
-          CODE_SIGNING_ALLOWED: "NO"
         run: flutter build macos --release
 
       - name: Package .app bundle
