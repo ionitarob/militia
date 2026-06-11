@@ -31,7 +31,7 @@ jobs:
 
       - name: Install Flutter
         run: |
-          git clone https://github.com/flutter/flutter.git -b stable --depth 1 "$HOME/flutter"
+          git clone https://github.com/flutter/flutter.git -b 3.41.5 --depth 1 "$HOME/flutter"
           echo "$HOME/flutter/bin" >> "$GITHUB_PATH"
 
       - name: Flutter doctor
@@ -89,7 +89,7 @@ jobs:
       - name: Install Flutter
         shell: bash
         run: |
-          git clone https://github.com/flutter/flutter.git -b stable --depth 1 "C:/flutter"
+          git clone https://github.com/flutter/flutter.git -b 3.41.5 --depth 1 "C:/flutter"
           echo "C:/flutter/bin" >> "$GITHUB_PATH"
 
       - name: Flutter doctor
