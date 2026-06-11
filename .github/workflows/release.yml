@@ -165,7 +165,19 @@ jobs:
         run: |
           $releaseDir = "frontend/build/windows/x64/runner/Release"
           $zipPath = "$env:TEMP/imliti-${{ env.VERSION }}-windows.zip"
-          Compress-Archive -Path "$releaseDir/*" -DestinationPath $zipPath -Force
+          if (Test-Path $zipPath) { Remove-Item $zipPath }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::Open($zipPath, 'Create')
+          Get-ChildItem -Path $releaseDir -Recurse | ForEach-Object {
+              if (-not $_.PSIsContainer) {
+                  $relative = $_.FullName.Substring($releaseDir.Length + 1)
+                  [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                      $zip, $_.FullName, $relative,
+                      [System.IO.Compression.CompressionLevel]::Optimal
+                  ) | Out-Null
+              }
+          }
+          $zip.Dispose()
           $sizeMB = [math]::Round((Get-Item $zipPath).Length / 1MB, 1)
           echo "ZIP_PATH=$zipPath" >> $env:GITHUB_ENV
           echo "ZIP_SIZE=${sizeMB}MB" >> $env:GITHUB_ENV
