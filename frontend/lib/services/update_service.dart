@@ -115,19 +115,16 @@ class UpdateService {
     String tmpDir,
   ) async {
     final batchPath = p.join(tmpDir, 'imliti_update.bat');
+    final vbsPath = p.join(tmpDir, 'imliti_update.vbs');
     final exeNoExt = p.basenameWithoutExtension(exeName);
 
-    // Batch file avoids PowerShell execution-policy restrictions and detaches
-    // reliably when launched via "cmd /c".  Uses ping for sleep (no console
-    // needed, unlike "timeout").
+    // Batch: waits for the app to exit, copies new files, relaunches.
+    // Uses ping for cross-version sleep (no interactive console needed).
     File(batchPath).writeAsStringSync(
       '@echo off\r\n'
-      // Wait for the Flutter process to fully exit (~3 s)
-      'ping -n 4 127.0.0.1 >nul 2>&1\r\n'
-      // Kill any lingering instance (handles crash-restart edge cases)
+      'ping -n 5 127.0.0.1 >nul 2>&1\r\n'
       'taskkill /F /IM "$exeNoExt.exe" >nul 2>&1\r\n'
       'ping -n 3 127.0.0.1 >nul 2>&1\r\n'
-      // Retry loop: exe file lock is released once the process is gone
       ':retry\r\n'
       'xcopy /E /H /R /Y "$extractDir\\*" "$installDir\\" >nul 2>&1\r\n'
       'if not errorlevel 1 goto launch\r\n'
@@ -138,14 +135,19 @@ class UpdateService {
       'del "%~f0"\r\n',
     );
 
-    // "cmd /c" creates a fully independent process — survives the parent exit.
-    await Process.start(
-      'cmd.exe',
-      ['/c', batchPath],
-      mode: ProcessStartMode.detached,
+    // Flutter wraps its process in a Windows Job Object (KILL_ON_JOB_CLOSE),
+    // so any child launched with CreateProcess is killed when the app exits.
+    // wscript.exe's WScript.Shell.Run uses ShellExecute internally, which
+    // creates the target process OUTSIDE the parent's Job Object — it survives.
+    // Chr(34) = " — avoids VBScript quote-escaping issues with paths with spaces.
+    File(vbsPath).writeAsStringSync(
+      'Dim q\r\n'
+      'q = Chr(34)\r\n'
+      'CreateObject("WScript.Shell").Run "cmd /c " & q & "$batchPath" & q, 0, False\r\n',
     );
-    // Brief pause so cmd has time to start before we exit.
-    await Future.delayed(const Duration(milliseconds: 300));
+
+    await Process.start('wscript.exe', ['/nologo', vbsPath]);
+    await Future.delayed(const Duration(milliseconds: 800));
     exit(0);
   }
 
