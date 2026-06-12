@@ -240,7 +240,7 @@ jobs:
               "version": "${{ env.VERSION }}",
               "notes": "${NOTES}",
               "macos": "https://${{ env.S3_BUCKET }}.s3.${{ env.AWS_REGION }}.amazonaws.com/app/macos/imliti-${{ env.VERSION }}.zip",
-              "windows": "https://${{ env.S3_BUCKET }}.s3.${{ env.AWS_REGION }}.amazonaws.com/app/windows/imliti-${{ env.VERSION }}.zip",
+              "windows": "https://${{ env.S3_BUCKET }}.s3.${{ env.AWS_REGION }}.amazonaws.com/app/windows/imliti-${{ env.VERSION }}-setup.exe",
           }
           print(json.dumps(manifest, indent=2))
           PYEOF

@@ -54,32 +54,27 @@ class UpdateService {
     void Function(double progress)? onProgress,
   }) async {
     final tmp = await getTemporaryDirectory();
+
+    if (Platform.isWindows) {
+      // Download the installer EXE and run it silently — no batch files, no
+      // console windows.  The installer handles closing the running app and
+      // replacing all files via Windows Restart Manager.
+      final setupPath = p.join(tmp.path, 'imliti_setup.exe');
+      await _download(info.downloadUrl, setupPath, onProgress);
+      onProgress?.call(1.0);
+      await _applyWindows(setupPath, tmp.path);
+      return;
+    }
+
+    // ── macOS: zip download + shell script swap ───────────────────────────────
     final zipPath = p.join(tmp.path, 'imliti_update.zip');
     final extractDir = Directory(p.join(tmp.path, 'imliti_new'));
 
     if (extractDir.existsSync()) extractDir.deleteSync(recursive: true);
     extractDir.createSync(recursive: true);
 
-    // ── Download (0 – 80 %) ───────────────────────────────────────────────────
-    final client = http.Client();
-    try {
-      final request = http.Request('GET', Uri.parse(info.downloadUrl));
-      final response = await client.send(request);
-      final total = response.contentLength ?? 0;
-      var received = 0;
+    await _download(info.downloadUrl, zipPath, onProgress);
 
-      final sink = File(zipPath).openWrite();
-      await for (final chunk in response.stream) {
-        sink.add(chunk);
-        received += chunk.length;
-        if (total > 0) onProgress?.call(received / total * 0.8);
-      }
-      await sink.close();
-    } finally {
-      client.close();
-    }
-
-    // ── Extract (80 – 95 %) ───────────────────────────────────────────────────
     onProgress?.call(0.82);
     final bytes = await File(zipPath).readAsBytes();
     final archive = ZipDecoder().decodeBytes(bytes);
@@ -95,55 +90,44 @@ class UpdateService {
     await File(zipPath).delete();
     onProgress?.call(0.95);
 
-    // ── Launch updater and exit ───────────────────────────────────────────────
-    final exePath = Platform.resolvedExecutable;
-    final installDir = File(exePath).parent.path;
+    await _applyMacOS(extractDir.path, tmp.path);
+  }
 
-    if (Platform.isWindows) {
-      await _applyWindows(extractDir.path, installDir, p.basename(exePath), tmp.path);
-    } else if (Platform.isMacOS) {
-      await _applyMacOS(extractDir.path, tmp.path);
+  Future<void> _download(
+    String url,
+    String destPath,
+    void Function(double)? onProgress,
+  ) async {
+    final client = http.Client();
+    try {
+      final response = await client.send(http.Request('GET', Uri.parse(url)));
+      final total = response.contentLength ?? 0;
+      var received = 0;
+      final sink = File(destPath).openWrite();
+      await for (final chunk in response.stream) {
+        sink.add(chunk);
+        received += chunk.length;
+        if (total > 0) onProgress?.call(received / total * 0.95);
+      }
+      await sink.close();
+    } finally {
+      client.close();
     }
   }
 
   // ── Windows ──────────────────────────────────────────────────────────────────
 
-  Future<void> _applyWindows(
-    String extractDir,
-    String installDir,
-    String exeName,
-    String tmpDir,
-  ) async {
-    final batchPath = p.join(tmpDir, 'imliti_update.bat');
+  Future<void> _applyWindows(String setupPath, String tmpDir) async {
+    // Run the installer silently via wscript.exe so it escapes Flutter's
+    // Windows Job Object (KILL_ON_JOB_CLOSE).  WScript.Shell.Run uses
+    // ShellExecute internally, creating the process outside the job — it
+    // survives the parent exit.  The installer's CloseApplications + Restart
+    // ApplicationsSettings handle closing the running app and relaunching.
     final vbsPath = p.join(tmpDir, 'imliti_update.vbs');
-    final exeNoExt = p.basenameWithoutExtension(exeName);
-
-    // Batch: waits for the app to exit, copies new files, relaunches.
-    // Uses ping for cross-version sleep (no interactive console needed).
-    File(batchPath).writeAsStringSync(
-      '@echo off\r\n'
-      'ping -n 5 127.0.0.1 >nul 2>&1\r\n'
-      'taskkill /F /IM "$exeNoExt.exe" >nul 2>&1\r\n'
-      'ping -n 3 127.0.0.1 >nul 2>&1\r\n'
-      ':retry\r\n'
-      'xcopy /E /H /R /Y "$extractDir\\*" "$installDir\\" >nul 2>&1\r\n'
-      'if not errorlevel 1 goto launch\r\n'
-      'ping -n 2 127.0.0.1 >nul 2>&1\r\n'
-      'goto retry\r\n'
-      ':launch\r\n'
-      'start "" "$installDir\\$exeName"\r\n'
-      'del "%~f0"\r\n',
-    );
-
-    // Flutter wraps its process in a Windows Job Object (KILL_ON_JOB_CLOSE),
-    // so any child launched with CreateProcess is killed when the app exits.
-    // wscript.exe's WScript.Shell.Run uses ShellExecute internally, which
-    // creates the target process OUTSIDE the parent's Job Object — it survives.
-    // Chr(34) = " — avoids VBScript quote-escaping issues with paths with spaces.
     File(vbsPath).writeAsStringSync(
       'Dim q\r\n'
       'q = Chr(34)\r\n'
-      'CreateObject("WScript.Shell").Run "cmd /c " & q & "$batchPath" & q, 0, False\r\n',
+      'CreateObject("WScript.Shell").Run q & "$setupPath" & q & " /SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS", 1, False\r\n',
     );
 
     await Process.start('wscript.exe', ['/nologo', vbsPath]);
