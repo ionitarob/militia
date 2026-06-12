@@ -114,42 +114,38 @@ class UpdateService {
     String exeName,
     String tmpDir,
   ) async {
-    final scriptPath = p.join(tmpDir, 'imliti_update.ps1');
+    final batchPath = p.join(tmpDir, 'imliti_update.bat');
     final exeNoExt = p.basenameWithoutExtension(exeName);
 
-    // PowerShell: wait for the app to fully exit, retry copy (exe lock), relaunch.
-    File(scriptPath).writeAsStringSync('''
-\$ErrorActionPreference = "Stop"
-Start-Sleep -Seconds 3
-Get-Process -Name "$exeNoExt" -ErrorAction SilentlyContinue | Stop-Process -Force
-Start-Sleep -Seconds 2
+    // Batch file avoids PowerShell execution-policy restrictions and detaches
+    // reliably when launched via "cmd /c".  Uses ping for sleep (no console
+    // needed, unlike "timeout").
+    File(batchPath).writeAsStringSync(
+      '@echo off\r\n'
+      // Wait for the Flutter process to fully exit (~3 s)
+      'ping -n 4 127.0.0.1 >nul 2>&1\r\n'
+      // Kill any lingering instance (handles crash-restart edge cases)
+      'taskkill /F /IM "$exeNoExt.exe" >nul 2>&1\r\n'
+      'ping -n 3 127.0.0.1 >nul 2>&1\r\n'
+      // Retry loop: exe file lock is released once the process is gone
+      ':retry\r\n'
+      'xcopy /E /H /R /Y "$extractDir\\*" "$installDir\\" >nul 2>&1\r\n'
+      'if not errorlevel 1 goto launch\r\n'
+      'ping -n 2 127.0.0.1 >nul 2>&1\r\n'
+      'goto retry\r\n'
+      ':launch\r\n'
+      'start "" "$installDir\\$exeName"\r\n'
+      'del "%~f0"\r\n',
+    );
 
-\$maxAttempts = 10
-\$attempt = 0
-\$copied = \$false
-while (\$attempt -lt \$maxAttempts -and -not \$copied) {
-  try {
-    Copy-Item "$extractDir\\*" -Destination "$installDir" -Recurse -Force -ErrorAction Stop
-    \$copied = \$true
-  } catch {
-    \$attempt++
-    Start-Sleep -Seconds 1
-  }
-}
-
-if (\$copied) {
-  Start-Process (Join-Path "$installDir" "$exeName")
-}
-
-Remove-Item "$extractDir" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item \$MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
-''');
-
+    // "cmd /c" creates a fully independent process — survives the parent exit.
     await Process.start(
-      'powershell.exe',
-      ['-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', scriptPath],
+      'cmd.exe',
+      ['/c', batchPath],
       mode: ProcessStartMode.detached,
     );
+    // Brief pause so cmd has time to start before we exit.
+    await Future.delayed(const Duration(milliseconds: 300));
     exit(0);
   }
 
