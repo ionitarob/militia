@@ -46,11 +46,20 @@ def lambda_handler(event, context):
 
         licitaciones   = data.get("licitaciones", [])
         adjudicaciones = data.get("adjudicaciones", [])
+        restore        = data.get("restore_listing", [])
 
-        log.info("Upserting %d licitaciones, %d adjudicaciones", len(licitaciones), len(adjudicaciones))
+        log.info("Upserting %d licitaciones, %d adjudicaciones, %d restores",
+                 len(licitaciones), len(adjudicaciones), len(restore))
 
         with conn:  # transaction per S3 file
             with conn.cursor() as cur:
+                for rec in restore:
+                    try:
+                        db.restore_listing_fields(cur, rec)
+                    except Exception as e:
+                        log.warning("restore %s error: %s", rec.get("external_id"), e)
+                        conn.rollback()
+
                 for rec in licitaciones:
                     try:
                         row_id = db.upsert_licitacion(cur, rec)

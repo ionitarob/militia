@@ -489,6 +489,7 @@ pub async fn dashboard_stats(
         .iter()
         .map(|r| serde_json::json!({
             "label": r.get::<String, _>("label"),
+            "value": r.get::<String, _>("label"),
             "count": r.get::<i32, _>("cnt"),
         }))
         .collect();
@@ -512,6 +513,7 @@ pub async fn dashboard_stats(
         .iter()
         .map(|r| serde_json::json!({
             "label": r.get::<String, _>("label"),
+            "value": r.get::<String, _>("label"),
             "count": r.get::<i32, _>("cnt"),
         }))
         .collect();

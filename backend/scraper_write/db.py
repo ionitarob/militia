@@ -12,6 +12,28 @@ import psycopg2.extras
 log = logging.getLogger(__name__)
 
 
+def restore_listing_fields(cur, rec: dict) -> None:
+    """
+    Restore importe_licitacion / fecha_limite_oferta from the original listing
+    scrape data.  Only updates rows where the value is currently NULL (safe to
+    run repeatedly).  Does not touch any other field.
+    """
+    cur.execute(
+        """
+        UPDATE licitacion SET
+            importe_licitacion  = COALESCE(importe_licitacion,  %(importe)s),
+            fecha_limite_oferta = COALESCE(fecha_limite_oferta, %(fecha_limite)s)
+        WHERE external_id = %(external_id)s
+          AND (%(importe)s IS NOT NULL OR %(fecha_limite)s IS NOT NULL)
+        """,
+        {
+            "external_id":  rec.get("external_id"),
+            "importe":      rec.get("importe_licitacion"),
+            "fecha_limite": rec.get("fecha_limite_oferta"),
+        },
+    )
+
+
 def upsert_licitacion(cur, rec: dict) -> Optional[int]:
     """
     Upsert a licitacion by external_id.
@@ -98,16 +120,18 @@ def upsert_licitacion(cur, rec: dict) -> Optional[int]:
 
     if params["fecha"] is None:
         # Refresh record — fecha not scraped from detail page. Only UPDATE existing row.
+        # importe_licitacion and fecha_limite_oferta come from the listing table,
+        # not the detail page — use COALESCE so a refresh never wipes them out.
         cur.execute(
             """
             UPDATE licitacion SET
                 titulo              = %(titulo)s,
                 numero_expediente   = %(numero_expediente)s,
-                importe_licitacion  = %(importe_licitacion)s,
+                importe_licitacion  = COALESCE(%(importe_licitacion)s, importe_licitacion),
                 valor_estimado      = %(valor_estimado)s,
                 tipo_procedimiento  = %(tipo_procedimiento)s::tipo_procedimiento_tipo,
                 tipo_tramitacion    = %(tipo_tramitacion)s,
-                fecha_limite_oferta = %(fecha_limite_oferta)s,
+                fecha_limite_oferta = COALESCE(%(fecha_limite_oferta)s, fecha_limite_oferta),
                 comunidad_autonoma  = %(comunidad_autonoma)s::comunidad_autonoma_tipo,
                 provincia           = %(provincia)s,
                 mercado_vertical    = %(mercado_vertical)s::mercado_vertical_tipo,

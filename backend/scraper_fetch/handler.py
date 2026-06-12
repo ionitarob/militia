@@ -60,6 +60,8 @@ def lambda_handler(event, context):
         return _run_refresh_all(event, context, creds, bucket)
     if mode == "scrape_documents":
         return _run_scrape_documents(event, context, creds, bucket)
+    if mode == "restore_from_s3":
+        return _run_restore_from_s3(event, context, bucket)
     return _run_daily(event, context, creds, bucket)
 
 
@@ -82,9 +84,15 @@ def _run_daily(event, context, creds, bucket):
 
     if remaining_ids:
         # ── (b) Checkpoint resume ─────────────────────────────────────────────
-        log.info("Checkpoint resume: %d licitaciones remaining", len(remaining_ids))
+        # checkpoint_remaining may be a list of dicts (new format, with listing
+        # fields) or a list of bare strings (old format, backward-compatible).
+        resume_rows = [
+            r if isinstance(r, dict) else {"external_id": r}
+            for r in remaining_ids
+        ]
+        log.info("Checkpoint resume: %d licitaciones remaining", len(resume_rows))
         licitaciones = _fetch_detail_pages(
-            session, [{"external_id": eid} for eid in remaining_ids],
+            session, resume_rows,
             context, bucket, today,
         )
         log.info("Resume licitaciones done: %d", len(licitaciones))
@@ -192,13 +200,24 @@ def _fetch_detail_pages(session, rows, context, bucket, today,
     completed = []
     for i, row in enumerate(rows):
         if context.get_remaining_time_in_millis() < MIN_TIME_MS:
-            remaining_ids = [r["external_id"] for r in rows[i:]]
-            log.info("Time low at record %d — checkpointing %d remaining ids", i, len(remaining_ids))
+            remaining_rows = rows[i:]
+            log.info("Time low at record %d — checkpointing %d remaining ids", i, len(remaining_rows))
 
             # Write what we have so far so scraper_write can upsert it now
             partial = (on_checkpoint_write or []) + completed
             if partial:
                 _write_s3(bucket, f"scrapes/partial-{today.isoformat()}.json", partial, [])
+
+            # Pass listing fields (fecha, importe, fecha_limite) alongside the id
+            # so the resumed invocation can merge them with the detail page data.
+            checkpoint_rows = [
+                {k: r.get(k) for k in (
+                    "external_id", "fecha", "fecha_limite_oferta",
+                    "importe_licitacion", "numero_expediente", "tipo_procedimiento",
+                    "puntos_precio", "puntos_mejoras", "puntos_subjetivos",
+                ) if r.get(k) is not None}
+                for r in remaining_rows
+            ]
 
             # Re-invoke self to finish the rest
             boto3.client("lambda").invoke(
@@ -206,10 +225,10 @@ def _fetch_detail_pages(session, rows, context, bucket, today,
                 InvocationType="Event",
                 Payload=json.dumps({
                     "mode": "daily",
-                    "checkpoint_remaining": remaining_ids,
+                    "checkpoint_remaining": checkpoint_rows,
                 }).encode(),
             )
-            log.info("Re-invoked self with %d remaining ids", len(remaining_ids))
+            log.info("Re-invoked self with %d remaining rows", len(checkpoint_rows))
             return None  # caller must check for None and return early
 
         eid = row["external_id"]
@@ -536,6 +555,87 @@ def _run_scrape_documents(event, context, creds, bucket):
         return {"statusCode": 202, "scraped": len(scraped), "message": "next page triggered"}
 
     return {"statusCode": 200, "scraped": len(scraped)}
+
+
+# ── Restore listing fields from S3 ────────────────────────────────────────────
+
+def _run_restore_from_s3(event, context, bucket):
+    """
+    One-shot recovery: reads all daily scrape files from S3, collects the
+    importe_licitacion and fecha_limite_oferta values that were captured at
+    scrape time, then writes a restore file so scraper_write patches only
+    those two fields back into any rows where they are currently NULL.
+
+    Supports pagination via the 'page_token' event field so it can resume if
+    Lambda time runs out.  Invoke with {"mode": "restore_from_s3"}.
+    """
+    s3        = boto3.client("s3")
+    today     = date.today()
+    page_token = event.get("page_token")  # continuation token for S3 listing
+
+    # Collect one canonical value per external_id across all daily scrape files.
+    # Use a dict so later files (more recent) overwrite earlier ones.
+    best: dict = {}
+
+    paginator = s3.get_paginator("list_objects_v2")
+    list_kwargs = {"Bucket": bucket, "Prefix": "scrapes/"}
+    if page_token:
+        list_kwargs["ContinuationToken"] = page_token
+
+    files_read = 0
+    next_token = None
+    for page in paginator.paginate(**list_kwargs):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            # Listing data lives in partial files; final YYYY-MM-DD.json has it stripped by the detail pass
+            if not re.match(r"scrapes/(partial-)?\d{4}-\d{2}-\d{2}\.json$", key):
+                continue
+            try:
+                data = json.loads(s3.get_object(Bucket=bucket, Key=key)["Body"].read())
+                for rec in data.get("licitaciones", []):
+                    eid     = rec.get("external_id")
+                    importe = rec.get("importe_licitacion")
+                    fecha   = rec.get("fecha_limite_oferta")
+                    if eid and (importe is not None or fecha is not None):
+                        best[eid] = {
+                            "external_id":       eid,
+                            "importe_licitacion": importe,
+                            "fecha_limite_oferta": fecha,
+                        }
+                files_read += 1
+            except Exception as e:
+                log.warning("restore_from_s3: could not read %s: %s", key, e)
+
+        # Check time budget — checkpoint if < 90 s remain
+        if context.get_remaining_time_in_millis() < MIN_TIME_MS:
+            next_token = page.get("NextContinuationToken")
+            break
+
+    restore_records = list(best.values())
+    log.info("restore_from_s3: read %d files, collected %d records with listing data",
+             files_read, len(restore_records))
+
+    if restore_records:
+        payload = json.dumps({
+            "scrape_date":    today.isoformat(),
+            "licitaciones":   [],
+            "adjudicaciones": [],
+            "restore_listing": restore_records,
+        }, ensure_ascii=False).encode()
+        out_key = f"scrapes/restore-listing-{today.isoformat()}.json"
+        s3.put_object(Bucket=bucket, Key=out_key, Body=payload, ContentType="application/json")
+        log.info("Wrote restore file → s3://%s/%s (%d bytes)", bucket, out_key, len(payload))
+
+    if next_token:
+        boto3.client("lambda").invoke(
+            FunctionName=context.function_name,
+            InvocationType="Event",
+            Payload=json.dumps({"mode": "restore_from_s3", "page_token": next_token}).encode(),
+        )
+        log.info("Time budget low — re-invoked with continuation token")
+        return {"statusCode": 202, "restored": len(restore_records), "message": "continued"}
+
+    return {"statusCode": 200, "restored": len(restore_records), "files_read": files_read}
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────

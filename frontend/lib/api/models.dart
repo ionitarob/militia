@@ -16,6 +16,7 @@ class LicitacionFilter {
   final String? competencia;
   final String? pipelineStage;
   final String? reciente;
+  final String? division;
   final String label;
 
   const LicitacionFilter({
@@ -32,23 +33,25 @@ class LicitacionFilter {
     this.competencia,
     this.pipelineStage,
     this.reciente,
+    this.division,
     required this.label,
   });
 
   Map<String, String> toQueryParams() => {
-    'deadline_range':     ?deadlineRange,
-    'importe_range':      ?importeRange,
-    'cat1':               ?cat1,
-    'cat2':               ?cat2,
-    'cat3':               ?cat3,
-    'comunidad':          ?comunidad,
-    'mercado':            ?mercado,
-    'tipo_procedimiento': ?tipoProcedimiento,
-    'duracion_range':     ?duracionRange,
-    'ingram_estado':      ?ingramEstado,
-    'competencia':        ?competencia,
-    'pipeline_stage':     ?pipelineStage,
-    'reciente':           ?reciente,
+    'deadline_range':           ?deadlineRange,
+    'importe_range':            ?importeRange,
+    'cat1':                     ?cat1,
+    'cat2':                     ?cat2,
+    'cat3':                     ?cat3,
+    'comunidad':                ?comunidad,
+    'mercado':                  ?mercado,
+    'tipo_procedimiento':       ?tipoProcedimiento,
+    'duracion_range':           ?duracionRange,
+    'ingram_estado':            ?ingramEstado,
+    'competencia':              ?competencia,
+    'pipeline_stage':           ?pipelineStage,
+    'reciente':                 ?reciente,
+    'cotizacion_solicitada_a':  ?division,
   };
 }
 

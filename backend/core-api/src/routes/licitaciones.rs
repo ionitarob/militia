@@ -110,7 +110,7 @@ fn list_sql(order_by: &str) -> String {
     //             $3=comunidad $4=mercado   $5=tipo_proc  $6=ingram_estado
     //             $7=competencia $8=cat1 $9=cat2 $10=cat3
     //             $11=deadline_range $12=importe_range $13=duracion_range
-    //             $14=pipeline_stage_filter  $15=reciente
+    //             $14=pipeline_stage_filter  $15=reciente  $16=division
     format!(r#"
 SELECT
     l.id,
@@ -192,12 +192,13 @@ WHERE TRUE
        OR ($14 = 'activas' AND l.pipeline_stage NOT IN ('ganada','perdida','desierta'))
        OR ($14 != 'activas' AND l.pipeline_stage::TEXT = $14))
   AND ($15::TEXT IS NULL OR l.fecha >= CURRENT_DATE - INTERVAL '2 days')
+  AND ($16::TEXT IS NULL OR l.cotizacion_solicitada_a = $16)
 ORDER BY {order_by}
 LIMIT $1 OFFSET $2
 "#)
 }
 
-// Count query: $1-$8=text filters, $9-$11=range filters, $12=pipeline_stage_filter $13=reciente
+// Count query: $1-$8=text filters, $9-$11=range filters, $12=pipeline_stage_filter $13=reciente $14=division
 const COUNT_SQL: &str = r#"
 SELECT COUNT(*)::BIGINT
 FROM licitacion l
@@ -243,6 +244,7 @@ WHERE TRUE
        OR ($12 = 'activas' AND l.pipeline_stage NOT IN ('ganada','perdida','desierta'))
        OR ($12 != 'activas' AND l.pipeline_stage::TEXT = $12))
   AND ($13::TEXT IS NULL OR l.fecha >= CURRENT_DATE - INTERVAL '2 days')
+  AND ($14::TEXT IS NULL OR l.cotizacion_solicitada_a = $14)
 "#;
 
 // ── GET /licitaciones ─────────────────────────────────────────────────────────
@@ -270,6 +272,7 @@ pub async fn list(state: Arc<AppState>, event: Request) -> Result<Response<Body>
     let duracion_range      = params.first("duracion_range").map(|s| s.to_string());
     let pipeline_stage_filter = params.first("pipeline_stage").map(|s| s.to_string());
     let reciente            = params.first("reciente").map(|s| s.to_string());
+    let division            = params.first("cotizacion_solicitada_a").map(|s| s.to_string());
     let order_by            = params.first("order_by").unwrap_or("fecha_desc");
 
     let sql = list_sql(order_by);
@@ -289,6 +292,7 @@ pub async fn list(state: Arc<AppState>, event: Request) -> Result<Response<Body>
         .bind(duracion_range.as_deref())
         .bind(pipeline_stage_filter.as_deref())
         .bind(reciente.as_deref())
+        .bind(division.as_deref())
         .fetch_all(&state.pool)
         .await
         .map_err(|e| format!("list query failed: {e}"))?;
@@ -307,6 +311,7 @@ pub async fn list(state: Arc<AppState>, event: Request) -> Result<Response<Body>
         .bind(duracion_range.as_deref())
         .bind(pipeline_stage_filter.as_deref())
         .bind(reciente.as_deref())
+        .bind(division.as_deref())
         .fetch_one(&state.pool)
         .await
         .map_err(|e| format!("count query failed: {e}"))?;

@@ -75,11 +75,26 @@ const _filterCategories = [
     icon: CupertinoIcons.briefcase_fill,
     color: Color(0xFF7C3AED),
     options: [
-      _FO('Pend. Solicitud', 'PENDIENTE SOLICITUD DE COTIZACIÓN A LA DIVISIÓN'),
-      _FO('Cotiz. Solicitada', 'COTIZACIÓN SOLICITADA (A LA DIVISIÓN)'),
-      _FO('Pend. Envío', 'PENDIENTE ENVÍO DE COTIZACIÓN A CLIENTE'),
-      _FO('Enviada a Cliente', 'COTIZACIÓN ENVIADA A CLIENTE - X4A'),
-      _FO('Rechazado (producto no ofrecido por Ingram)', 'RECHAZADO'),
+      _FO('Pend. solicitud a división', 'PENDIENTE SOLICITUD DE COTIZACIÓN A LA DIVISIÓN'),
+      _FO('Cotiz. solicitada a división', 'COTIZACIÓN SOLICITADA (A LA DIVISIÓN)'),
+      _FO('Pend. envío a cliente', 'PENDIENTE ENVÍO DE COTIZACIÓN A CLIENTE'),
+      _FO('Enviada a cliente (X4A)', 'COTIZACIÓN ENVIADA A CLIENTE - X4A'),
+      _FO('Rechazado', 'RECHAZADO'),
+    ],
+  ),
+  _FC(
+    key: 'division',
+    title: 'División',
+    icon: CupertinoIcons.person_2_fill,
+    color: Color(0xFFDB2777),
+    options: [
+      _FO('Alan Jaumandreu', 'DIVISIÓN ALAN JAUMANDREU'),
+      _FO('Jorge Nicolás', 'DIVISIÓN JORGE NICOLÁS'),
+      _FO('Servicios (Oscar González)', 'DIVISIÓN SERVICIOS (OSCAR GONZÁLEZ)'),
+      _FO('Martin Trullas', 'DIVISIÓN MARTIN TRULLAS'),
+      _FO('AVPRO/UCC (Alex Rincón)', 'DIVISIÓN AVPRO/UCC (ALEX RINCÓN)'),
+      _FO('DCPOS/PHSEC (Sergio Patiño)', 'DIVISIÓN DCPOS/PHSEC (SERGIO PATIÑO)'),
+      _FO('Cloud', 'DIVISIÓN CLOUD'),
     ],
   ),
   _FC(
@@ -172,6 +187,22 @@ const _filterCategories = [
   ),
 ];
 
+// CAT2/CAT3 are not in the static list — shown dynamically after parent is selected.
+const _cat2FC = _FC(
+  key: 'cat2',
+  title: 'Subcategoría (CAT2)',
+  icon: CupertinoIcons.layers_fill,
+  color: Color(0xFF0369A1),
+  options: [],
+);
+const _cat3FC = _FC(
+  key: 'cat3',
+  title: 'Especialidad (CAT3)',
+  icon: CupertinoIcons.tag_fill,
+  color: Color(0xFF6D28D9),
+  options: [],
+);
+
 // ── Ingram estado helpers ─────────────────────────────────────────────────────
 
 (Color bg, Color fg, String label) _ingramEstadoStyle(String? estado) {
@@ -226,6 +257,11 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
   String? _fMercado;
   String? _fTipoProcedimiento;
   String? _fDuracionRange;
+  String? _fDivision;
+
+  // Dynamic options for CAT2/CAT3 (loaded from stats on init)
+  List<_FO> _cat2Options = const [];
+  List<_FO> _cat3Options = const [];
 
   // Sort state
   String _sortBy = 'fecha_desc'; // default: newest first
@@ -244,7 +280,25 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
     super.initState();
     _applyWidgetFilter();
     _load();
+    _loadCatOptions();
     _scrollController.addListener(_onScroll);
+  }
+
+  Future<void> _loadCatOptions() async {
+    try {
+      final stats = await _api.getDashboardStats();
+      if (!mounted) return;
+      setState(() {
+        _cat2Options = stats.breakdown.cat2
+            .where((b) => b.value.isNotEmpty)
+            .map((b) => _FO(b.label, b.value))
+            .toList();
+        _cat3Options = stats.breakdown.cat3
+            .where((b) => b.value.isNotEmpty)
+            .map((b) => _FO(b.label, b.value))
+            .toList();
+      });
+    } catch (_) {}
   }
 
   void _applyWidgetFilter() {
@@ -260,6 +314,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
     _fMercado = f.mercado;
     _fTipoProcedimiento = f.tipoProcedimiento;
     _fDuracionRange = f.duracionRange;
+    _fDivision = f.division;
   }
 
   LicitacionFilter? get _activeFilter {
@@ -273,7 +328,8 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
         _fComunidad != null ||
         _fMercado != null ||
         _fTipoProcedimiento != null ||
-        _fDuracionRange != null;
+        _fDuracionRange != null ||
+        _fDivision != null;
     if (!hasAny) return null;
     return LicitacionFilter(
       deadlineRange: _fDeadlineRange,
@@ -286,6 +342,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
       mercado: _fMercado,
       tipoProcedimiento: _fTipoProcedimiento,
       duracionRange: _fDuracionRange,
+      division: _fDivision,
       label: _buildLabel(),
     );
   }
@@ -307,6 +364,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
       parts.add(_labelFor('tipoProcedimiento', _fTipoProcedimiento!));
     if (_fDuracionRange != null)
       parts.add(_labelFor('duracionRange', _fDuracionRange!));
+    if (_fDivision != null) parts.add(_labelFor('division', _fDivision!));
     return parts.join(' · ');
   }
 
@@ -323,10 +381,13 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
       _fImporteRange,
       _fIngramEstado,
       _fCat1,
+      _fCat2,
+      _fCat3,
       _fComunidad,
       _fMercado,
       _fTipoProcedimiento,
       _fDuracionRange,
+      _fDivision,
     ].where((v) => v != null).length;
   }
 
@@ -457,6 +518,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
       'mercado': _fMercado,
       'tipoProcedimiento': _fTipoProcedimiento,
       'duracionRange': _fDuracionRange,
+      'division': _fDivision,
     };
 
     final apply = await showCupertinoModalPopup<bool>(
@@ -473,6 +535,11 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
           'mercado': _fMercado,
           'tipoProcedimiento': _fTipoProcedimiento,
           'duracionRange': _fDuracionRange,
+          'division': _fDivision,
+        },
+        extraOptions: {
+          'cat2': _cat2Options,
+          'cat3': _cat3Options,
         },
         onChanged: (key, value) {
           setState(() {
@@ -497,6 +564,8 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
                 _fTipoProcedimiento = value;
               case 'duracionRange':
                 _fDuracionRange = value;
+              case 'division':
+                _fDivision = value;
             }
           });
         },
@@ -519,6 +588,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
           _fMercado = snap['mercado'];
           _fTipoProcedimiento = snap['tipoProcedimiento'];
           _fDuracionRange = snap['duracionRange'];
+          _fDivision = snap['division'];
         });
       }
     }
@@ -529,6 +599,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
       _fDeadlineRange = _fImporteRange = _fIngramEstado = null;
       _fCat1 = _fCat2 = _fCat3 = null;
       _fComunidad = _fMercado = _fTipoProcedimiento = _fDuracionRange = null;
+      _fDivision = null;
     });
     _load();
   }
@@ -787,8 +858,13 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
 class _FilterSheet extends StatefulWidget {
   final Map<String, String?> initial;
   final void Function(String key, String? value) onChanged;
+  final Map<String, List<_FO>> extraOptions;
 
-  const _FilterSheet({required this.initial, required this.onChanged});
+  const _FilterSheet({
+    required this.initial,
+    required this.onChanged,
+    this.extraOptions = const {},
+  });
 
   @override
   State<_FilterSheet> createState() => _FilterSheetState();
@@ -805,22 +881,55 @@ class _FilterSheetState extends State<_FilterSheet> {
 
   int get _count => _values.values.where((v) => v != null).length;
 
+  // Show CAT2 only when CAT1 is selected; CAT3 only when CAT2 is selected.
+  List<_FC> get _visibleCategories {
+    final list = <_FC>[];
+    for (final cat in _filterCategories) {
+      list.add(cat);
+      if (cat.key == 'cat1' && _values['cat1'] != null) {
+        list.add(_cat2FC);
+        if (_values['cat2'] != null) {
+          list.add(_cat3FC);
+        }
+      }
+    }
+    return list;
+  }
+
   String _labelFor(String key, String value) {
+    final extra = widget.extraOptions[key];
+    if (extra != null) {
+      final match = extra.where((o) => o.value == value).firstOrNull;
+      if (match != null) return match.label;
+    }
     final cat = _filterCategories.where((c) => c.key == key).firstOrNull;
     return cat?.options.where((o) => o.value == value).firstOrNull?.label ??
         value;
   }
 
   Future<void> _pickCategory(BuildContext rowCtx, _FC cat) async {
+    final options = widget.extraOptions[cat.key] ?? cat.options;
+    if (options.isEmpty) return;
     final current = _values[cat.key];
     final box = rowCtx.findRenderObject() as RenderBox?;
     if (box == null) return;
     final overlay =
         Navigator.of(rowCtx).overlay!.context.findRenderObject() as RenderBox;
-    final rect = box.localToGlobal(Offset.zero, ancestor: overlay) & box.size;
+    final topLeft = box.localToGlobal(Offset.zero, ancestor: overlay);
+    final rect = topLeft & box.size;
+    final overlaySize = overlay.size;
+    // Anchor at the right edge of the row so the menu expands leftward,
+    // aligning with the "Todos >" chevron instead of the row's left edge.
+    final rightInset = overlaySize.width - rect.right;
+    final position = RelativeRect.fromLTRB(
+      rect.right,   // left inset = right edge of row (forces leftward expansion)
+      rect.top,
+      rightInset,
+      overlaySize.height - rect.bottom,
+    );
     final picked = await showMenu<String>(
       context: rowCtx,
-      position: RelativeRect.fromRect(rect, Offset.zero & overlay.size),
+      position: position,
       color: const Color(0xFFFFFFFF),
       elevation: 12,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
@@ -845,7 +954,7 @@ class _FilterSheetState extends State<_FilterSheet> {
               ],
             ),
           ),
-        ...cat.options.map(
+        ...options.map(
           (o) => PopupMenuItem<String>(
             value: o.value,
             padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -883,8 +992,24 @@ class _FilterSheetState extends State<_FilterSheet> {
       ],
     );
     if (picked == null) return;
-    setState(() => _values[cat.key] = picked.isEmpty ? null : picked);
-    widget.onChanged(cat.key, picked.isEmpty ? null : picked);
+    final newVal = picked.isEmpty ? null : picked;
+    setState(() {
+      _values[cat.key] = newVal;
+      // Cascade: changing CAT1 clears CAT2+CAT3; changing CAT2 clears CAT3.
+      if (cat.key == 'cat1') {
+        _values['cat2'] = null;
+        _values['cat3'] = null;
+      } else if (cat.key == 'cat2') {
+        _values['cat3'] = null;
+      }
+    });
+    widget.onChanged(cat.key, newVal);
+    if (cat.key == 'cat1') {
+      widget.onChanged('cat2', null);
+      widget.onChanged('cat3', null);
+    } else if (cat.key == 'cat2') {
+      widget.onChanged('cat3', null);
+    }
   }
 
   void _clearAll() {
@@ -994,10 +1119,11 @@ class _FilterSheetState extends State<_FilterSheet> {
                       ],
                     ),
                     child: Column(
-                      children: List.generate(_filterCategories.length, (i) {
-                        final cat = _filterCategories[i];
+                      children: List.generate(_visibleCategories.length, (i) {
+                        final cats = _visibleCategories;
+                        final cat = cats[i];
                         final val = _values[cat.key];
-                        final isLast = i == _filterCategories.length - 1;
+                        final isLast = i == cats.length - 1;
                         return Column(
                           children: [
                             Builder(

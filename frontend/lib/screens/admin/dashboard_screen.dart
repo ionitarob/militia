@@ -305,8 +305,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 anim: _anim(2),
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  child: SizedBox(
+                    height: 320,
+                    child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Expanded(
                         flex: 7,
@@ -330,10 +332,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                         ),
                       ),
                     ],
-                  ),
-                ),
-              ),
-            ),
+                  ),   // Row
+                  ),   // SizedBox
+                ),     // Padding
+              ),       // FadeSlide
+            ),         // SliverToBoxAdapter
 
             // ── Row 3: Valor · Comunidades · Mercado ─────────────────────────
             SliverToBoxAdapter(
@@ -341,46 +344,49 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 anim: _anim(3),
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: _DistCard(
-                          title: 'Valor',
-                          icon: CupertinoIcons.money_euro_circle_fill,
-                          iconColor: const Color(0xFF059669),
-                          items: _stats!.breakdown.importe,
-                          onTap: (v, l) => _nav(LicitacionFilter(importeRange: v, label: l)),
-                          total: _stats!.activas,
+                  child: SizedBox(
+                    height: 300,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(
+                          child: _DistCard(
+                            title: 'Valor',
+                            icon: CupertinoIcons.money_euro_circle_fill,
+                            iconColor: const Color(0xFF059669),
+                            items: _stats!.breakdown.importe,
+                            onTap: (v, l) => _nav(LicitacionFilter(importeRange: v, label: l)),
+                            total: _stats!.activas,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _DistCard(
-                          title: 'Comunidades Autónomas',
-                          icon: CupertinoIcons.map_fill,
-                          iconColor: const Color(0xFF0EA5E9),
-                          items: _stats!.breakdown.comunidad,
-                          onTap: (v, l) => _nav(LicitacionFilter(comunidad: v, label: l)),
-                          total: _stats!.activas,
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _DistCard(
+                            title: 'Comunidades Autónomas',
+                            icon: CupertinoIcons.map_fill,
+                            iconColor: const Color(0xFF0EA5E9),
+                            items: _stats!.breakdown.comunidad,
+                            onTap: (v, l) => _nav(LicitacionFilter(comunidad: v, label: l)),
+                            total: _stats!.activas,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _DistCard(
-                          title: 'Mercado vertical',
-                          icon: CupertinoIcons.building_2_fill,
-                          iconColor: const Color(0xFF7C3AED),
-                          items: _stats!.breakdown.mercado,
-                          onTap: (v, l) => _nav(LicitacionFilter(mercado: v, label: l)),
-                          total: _stats!.activas,
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _DistCard(
+                            title: 'Mercado vertical',
+                            icon: CupertinoIcons.building_2_fill,
+                            iconColor: const Color(0xFF7C3AED),
+                            items: _stats!.breakdown.mercado,
+                            onTap: (v, l) => _nav(LicitacionFilter(mercado: v, label: l)),
+                            total: _stats!.activas,
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
+                      ],
+                    ),   // Row
+                  ),     // SizedBox
+                ),       // Padding
+              ),         // FadeSlide
+            ),           // SliverToBoxAdapter
 
 
             // ── Declines ──────────────────────────────────────────────────────
@@ -1574,6 +1580,7 @@ class _DistCardState extends State<_DistCard>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
   late final Animation<double> _anim;
+  final _scrollCtrl = ScrollController();
 
   @override
   void initState() {
@@ -1591,6 +1598,7 @@ class _DistCardState extends State<_DistCard>
   @override
   void dispose() {
     _ctrl.dispose();
+    _scrollCtrl.dispose();
     super.dispose();
   }
 
@@ -1606,21 +1614,38 @@ class _DistCardState extends State<_DistCard>
       icon: widget.icon,
       iconColor: widget.iconColor,
       trailing: totalVal > 0 ? 'Total: $totalVal' : null,
-      child: Column(
-        children: List.generate(widget.items.length, (i) {
-          final item = widget.items[i];
-          return _DarkBarRow(
-            label: item.label,
-            count: item.count,
-            max: max,
-            color: _palette[i % _palette.length],
-            barAnim: _anim,
-            isLast: i == widget.items.length - 1,
-            onTap: item.count > 0
-                ? () => widget.onTap(item.value, item.label)
-                : null,
-          );
-        }),
+      expand: true,
+      child: Listener(
+        onPointerSignal: (event) {
+          if (event is PointerScrollEvent) {
+            GestureBinding.instance.pointerSignalResolver.register(event, (_) {});
+          }
+        },
+        child: Scrollbar(
+          controller: _scrollCtrl,
+          thumbVisibility: true,
+          radius: const Radius.circular(4),
+          thickness: 3,
+          child: SingleChildScrollView(
+            controller: _scrollCtrl,
+            child: Column(
+              children: List.generate(widget.items.length, (i) {
+                final item = widget.items[i];
+                return _DarkBarRow(
+                  label: item.label,
+                  count: item.count,
+                  max: max,
+                  color: _palette[i % _palette.length],
+                  barAnim: _anim,
+                  isLast: i == widget.items.length - 1,
+                  onTap: item.count > 0
+                      ? () => widget.onTap(item.value, item.label)
+                      : null,
+                );
+              }),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -1856,11 +1881,9 @@ class _CatTabbedCardState extends State<_CatTabbedCard>
   int _level = 0;
   String? _selectedCat1; // label as returned by API
   String? _selectedCat2;
-  bool _expanded = false;
   late final AnimationController _barCtrl;
   late final Animation<double> _barAnim;
-
-  static const _maxCollapsed = 8;
+  final _scrollCtrl = ScrollController();
 
   @override
   void initState() {
@@ -1878,6 +1901,7 @@ class _CatTabbedCardState extends State<_CatTabbedCard>
   @override
   void dispose() {
     _barCtrl.dispose();
+    _scrollCtrl.dispose();
     super.dispose();
   }
 
@@ -1906,7 +1930,6 @@ class _CatTabbedCardState extends State<_CatTabbedCard>
         _selectedCat2 = label;
         _level = 2;
       }
-      _expanded = false;
     });
     _barCtrl.forward(from: 0);
   }
@@ -1916,7 +1939,6 @@ class _CatTabbedCardState extends State<_CatTabbedCard>
       _level = math.max(0, _level - 1);
       if (_level == 0) _selectedCat1 = null;
       if (_level <= 1) _selectedCat2 = null;
-      _expanded = false;
     });
     _barCtrl.forward(from: 0);
   }
@@ -1938,7 +1960,6 @@ class _CatTabbedCardState extends State<_CatTabbedCard>
   @override
   Widget build(BuildContext context) {
     final items = _currentItems;
-    final visible = _expanded ? items : items.take(_maxCollapsed).toList();
     final max = items.fold(0, (m, i) => i.count > m ? i.count : m).clamp(1, 999999);
     final total = widget.cat1.fold(0, (s, i) => s + i.count);
 
@@ -1983,65 +2004,47 @@ class _CatTabbedCardState extends State<_CatTabbedCard>
               ],
             ),
           ),
-          const SizedBox(height: 12),
-          // Bar rows
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-            child: Column(
-              children: List.generate(visible.length, (i) {
-                final item = visible[i];
-                final drillable = _canDrillDown(item);
-                return _DarkBarRow(
-                  label: item.label,
-                  count: item.count,
-                  max: max,
-                  color: _palette[i % _palette.length],
-                  barAnim: _barAnim,
-                  isLast: i == visible.length - 1 &&
-                      (!_expanded || items.length <= _maxCollapsed),
-                  onTap: drillable ? () => _drillDown(item.label) : () => _navigateItem(item.label),
-                  trailing: const _VerCategoriaChip(),
-                  onTrailingTap: () => _navigateItem(item.label),
-                );
-              }),
-            ),
-          ),
-          // Show more / less toggle
-          if (items.length > _maxCollapsed)
-            GestureDetector(
-              onTap: () => setState(() => _expanded = !_expanded),
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                decoration: const BoxDecoration(
-                  border: Border(top: BorderSide(color: _border)),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      _expanded
-                          ? 'Ver menos'
-                          : 'Ver ${items.length - _maxCollapsed} más',
-                      style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                          color: _blue),
+          const SizedBox(height: 8),
+          Container(height: 0.5, color: _border),
+          // Scrollable bar rows
+          Expanded(
+            child: Listener(
+              onPointerSignal: (event) {
+                if (event is PointerScrollEvent) {
+                  GestureBinding.instance.pointerSignalResolver.register(event, (_) {});
+                }
+              },
+              child: Scrollbar(
+                controller: _scrollCtrl,
+                thumbVisibility: true,
+                radius: const Radius.circular(4),
+                thickness: 3,
+                child: SingleChildScrollView(
+                  controller: _scrollCtrl,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+                    child: Column(
+                      children: List.generate(items.length, (i) {
+                        final item = items[i];
+                        final drillable = _canDrillDown(item);
+                        return _DarkBarRow(
+                          label: item.label,
+                          count: item.count,
+                          max: max,
+                          color: _palette[i % _palette.length],
+                          barAnim: _barAnim,
+                          isLast: i == items.length - 1,
+                          onTap: drillable ? () => _drillDown(item.label) : () => _navigateItem(item.label),
+                          trailing: const _VerCategoriaChip(),
+                          onTrailingTap: () => _navigateItem(item.label),
+                        );
+                      }),
                     ),
-                    const SizedBox(width: 4),
-                    Icon(
-                      _expanded
-                          ? CupertinoIcons.chevron_up
-                          : CupertinoIcons.chevron_down,
-                      size: 11,
-                      color: _blue,
-                    ),
-                  ],
+                  ),
                 ),
               ),
-            )
-          else
-            const SizedBox(height: 14),
+            ),
+          ),
         ],
       ),
     );
