@@ -117,28 +117,32 @@ class UpdateService {
     final scriptPath = p.join(tmpDir, 'imliti_update.ps1');
     final exeNoExt = p.basenameWithoutExtension(exeName);
 
-    // PowerShell: wait for the app to fully exit, copy new files, relaunch.
-    File(scriptPath).writeAsStringSync(r'''
-$ErrorActionPreference = "SilentlyContinue"
-Start-Sleep -Seconds 2
-''' +
-        'Get-Process -Name "$exeNoExt" | Stop-Process -Force\n'
-        'Start-Sleep -Seconds 1\n'
-        'Copy-Item "$extractDir\\*" -Destination "$installDir" -Recurse -Force\n'
-        'Start-Process (Join-Path "$installDir" "$exeName")\n'
-        'Remove-Item "$extractDir" -Recurse -Force\n'
-        'Remove-Item \$MyInvocation.MyCommand.Path -Force\n');
-
-    // Rewrite with proper interpolation (raw string above avoids escaping issues)
+    // PowerShell: wait for the app to fully exit, retry copy (exe lock), relaunch.
     File(scriptPath).writeAsStringSync('''
-\$ErrorActionPreference = "SilentlyContinue"
-Start-Sleep -Seconds 2
+\$ErrorActionPreference = "Stop"
+Start-Sleep -Seconds 3
 Get-Process -Name "$exeNoExt" -ErrorAction SilentlyContinue | Stop-Process -Force
-Start-Sleep -Seconds 1
-Copy-Item "$extractDir\\*" -Destination "$installDir" -Recurse -Force
-Start-Process (Join-Path "$installDir" "$exeName")
-Remove-Item "$extractDir" -Recurse -Force
-Remove-Item \$MyInvocation.MyCommand.Path -Force
+Start-Sleep -Seconds 2
+
+\$maxAttempts = 10
+\$attempt = 0
+\$copied = \$false
+while (\$attempt -lt \$maxAttempts -and -not \$copied) {
+  try {
+    Copy-Item "$extractDir\\*" -Destination "$installDir" -Recurse -Force -ErrorAction Stop
+    \$copied = \$true
+  } catch {
+    \$attempt++
+    Start-Sleep -Seconds 1
+  }
+}
+
+if (\$copied) {
+  Start-Process (Join-Path "$installDir" "$exeName")
+}
+
+Remove-Item "$extractDir" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item \$MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
 ''');
 
     await Process.start(
