@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../api/client.dart';
 import '../api/models.dart';
+import '../data/cat_tree.dart';
 import '../widgets/pipeline_badge.dart';
 import '../widgets/skeleton_tile.dart';
 import 'licitacion_detail_screen.dart';
@@ -907,8 +908,28 @@ class _FilterSheetState extends State<_FilterSheet> {
         value;
   }
 
+  List<_FO> _optionsFor(_FC cat) {
+    final all = widget.extraOptions[cat.key] ?? cat.options;
+    if (cat.key == 'cat2') {
+      final cat1 = _values['cat1']?.toLowerCase().trim();
+      if (cat1 == null) return all;
+      final allowed = catTree[cat1]?.keys.map((k) => k.toLowerCase().trim()).toSet() ?? {};
+      if (allowed.isEmpty) return all;
+      return all.where((o) => allowed.contains(o.label.toLowerCase().trim())).toList();
+    }
+    if (cat.key == 'cat3') {
+      final cat1 = _values['cat1']?.toLowerCase().trim();
+      final cat2 = _values['cat2']?.toLowerCase().trim();
+      if (cat1 == null || cat2 == null) return all;
+      final allowed = catTree[cat1]?[cat2]?.map((v) => v.toLowerCase().trim()).toSet() ?? {};
+      if (allowed.isEmpty) return all;
+      return all.where((o) => allowed.contains(o.label.toLowerCase().trim())).toList();
+    }
+    return all;
+  }
+
   Future<void> _pickCategory(BuildContext rowCtx, _FC cat) async {
-    final options = widget.extraOptions[cat.key] ?? cat.options;
+    final options = _optionsFor(cat);
     if (options.isEmpty) return;
     final current = _values[cat.key];
     final box = rowCtx.findRenderObject() as RenderBox?;
