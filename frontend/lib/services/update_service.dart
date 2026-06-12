@@ -127,7 +127,7 @@ class UpdateService {
     File(vbsPath).writeAsStringSync(
       'Dim q\r\n'
       'q = Chr(34)\r\n'
-      'CreateObject("WScript.Shell").Run q & "$setupPath" & q & " /SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS", 1, False\r\n',
+      'CreateObject("WScript.Shell").Run q & "$setupPath" & q & " /VERYSILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS", 1, False\r\n',
     );
 
     await Process.start('wscript.exe', ['/nologo', vbsPath]);
