@@ -111,6 +111,7 @@ fn list_sql(order_by: &str) -> String {
     //             $7=competencia $8=cat1 $9=cat2 $10=cat3
     //             $11=deadline_range $12=importe_range $13=duracion_range
     //             $14=pipeline_stage_filter  $15=reciente  $16=division
+    //             $17=asignada ('si'|'no')
     format!(r#"
 SELECT
     l.id,
@@ -193,16 +194,20 @@ WHERE TRUE
        OR ($14 != 'activas' AND l.pipeline_stage::TEXT = $14))
   AND ($15::TEXT IS NULL OR l.fecha >= CURRENT_DATE - INTERVAL '2 days')
   AND ($16::TEXT IS NULL OR l.cotizacion_solicitada_a = $16)
+  AND ($17::TEXT IS NULL
+       OR ($17 = 'si'  AND la.assignee_id IS NOT NULL)
+       OR ($17 = 'no'  AND la.assignee_id IS NULL))
 ORDER BY {order_by}
 LIMIT $1 OFFSET $2
 "#)
 }
 
-// Count query: $1-$8=text filters, $9-$11=range filters, $12=pipeline_stage_filter $13=reciente $14=division
+// Count query: $1-$8=text filters, $9-$11=range filters, $12=pipeline_stage_filter $13=reciente $14=division $15=asignada
 const COUNT_SQL: &str = r#"
 SELECT COUNT(*)::BIGINT
 FROM licitacion l
 LEFT JOIN area_tecnologica at ON at.id = l.area_tecnologica_id
+LEFT JOIN licitacion_assignment la ON la.licitacion_id = l.id AND la.active = TRUE
 WHERE TRUE
   AND ($1::TEXT IS NULL OR l.comunidad_autonoma::TEXT = $1)
   AND ($2::TEXT IS NULL OR l.mercado_vertical::TEXT = $2)
@@ -245,6 +250,9 @@ WHERE TRUE
        OR ($12 != 'activas' AND l.pipeline_stage::TEXT = $12))
   AND ($13::TEXT IS NULL OR l.fecha >= CURRENT_DATE - INTERVAL '2 days')
   AND ($14::TEXT IS NULL OR l.cotizacion_solicitada_a = $14)
+  AND ($15::TEXT IS NULL
+       OR ($15 = 'si'  AND la.assignee_id IS NOT NULL)
+       OR ($15 = 'no'  AND la.assignee_id IS NULL))
 "#;
 
 // ── GET /licitaciones ─────────────────────────────────────────────────────────
@@ -273,6 +281,7 @@ pub async fn list(state: Arc<AppState>, event: Request) -> Result<Response<Body>
     let pipeline_stage_filter = params.first("pipeline_stage").map(|s| s.to_string());
     let reciente            = params.first("reciente").map(|s| s.to_string());
     let division            = params.first("cotizacion_solicitada_a").map(|s| s.to_string());
+    let asignada            = params.first("asignada").map(|s| s.to_string());
     let order_by            = params.first("order_by").unwrap_or("fecha_desc");
 
     let sql = list_sql(order_by);
@@ -293,6 +302,7 @@ pub async fn list(state: Arc<AppState>, event: Request) -> Result<Response<Body>
         .bind(pipeline_stage_filter.as_deref())
         .bind(reciente.as_deref())
         .bind(division.as_deref())
+        .bind(asignada.as_deref())
         .fetch_all(&state.pool)
         .await
         .map_err(|e| format!("list query failed: {e}"))?;
@@ -312,6 +322,7 @@ pub async fn list(state: Arc<AppState>, event: Request) -> Result<Response<Body>
         .bind(pipeline_stage_filter.as_deref())
         .bind(reciente.as_deref())
         .bind(division.as_deref())
+        .bind(asignada.as_deref())
         .fetch_one(&state.pool)
         .await
         .map_err(|e| format!("count query failed: {e}"))?;

@@ -186,6 +186,16 @@ const _filterCategories = [
       _FO('> 72m', 'gt72'),
     ],
   ),
+  _FC(
+    key: 'asignada',
+    title: 'Asignación',
+    icon: CupertinoIcons.person_fill,
+    color: Color(0xFF7C3AED),
+    options: [
+      _FO('Asignada', 'si'),
+      _FO('Sin asignar', 'no'),
+    ],
+  ),
 ];
 
 // CAT2/CAT3 are not in the static list — shown dynamically after parent is selected.
@@ -259,6 +269,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
   String? _fTipoProcedimiento;
   String? _fDuracionRange;
   String? _fDivision;
+  String? _fAsignada;
 
   // Dynamic options for CAT2/CAT3 (loaded from stats on init)
   List<_FO> _cat2Options = const [];
@@ -316,6 +327,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
     _fTipoProcedimiento = f.tipoProcedimiento;
     _fDuracionRange = f.duracionRange;
     _fDivision = f.division;
+    _fAsignada = f.asignada;
   }
 
   LicitacionFilter? get _activeFilter {
@@ -330,7 +342,8 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
         _fMercado != null ||
         _fTipoProcedimiento != null ||
         _fDuracionRange != null ||
-        _fDivision != null;
+        _fDivision != null ||
+        _fAsignada != null;
     if (!hasAny) return null;
     return LicitacionFilter(
       deadlineRange: _fDeadlineRange,
@@ -344,6 +357,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
       tipoProcedimiento: _fTipoProcedimiento,
       duracionRange: _fDuracionRange,
       division: _fDivision,
+      asignada: _fAsignada,
       label: _buildLabel(),
     );
   }
@@ -366,6 +380,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
     if (_fDuracionRange != null)
       parts.add(_labelFor('duracionRange', _fDuracionRange!));
     if (_fDivision != null) parts.add(_labelFor('division', _fDivision!));
+    if (_fAsignada != null) parts.add(_labelFor('asignada', _fAsignada!));
     return parts.join(' · ');
   }
 
@@ -389,6 +404,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
       _fTipoProcedimiento,
       _fDuracionRange,
       _fDivision,
+      _fAsignada,
     ].where((v) => v != null).length;
   }
 
@@ -520,6 +536,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
       'tipoProcedimiento': _fTipoProcedimiento,
       'duracionRange': _fDuracionRange,
       'division': _fDivision,
+      'asignada': _fAsignada,
     };
 
     final apply = await showCupertinoModalPopup<bool>(
@@ -537,6 +554,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
           'tipoProcedimiento': _fTipoProcedimiento,
           'duracionRange': _fDuracionRange,
           'division': _fDivision,
+          'asignada': _fAsignada,
         },
         extraOptions: {
           'cat2': _cat2Options,
@@ -567,6 +585,8 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
                 _fDuracionRange = value;
               case 'division':
                 _fDivision = value;
+              case 'asignada':
+                _fAsignada = value;
             }
           });
         },
@@ -590,6 +610,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
           _fTipoProcedimiento = snap['tipoProcedimiento'];
           _fDuracionRange = snap['duracionRange'];
           _fDivision = snap['division'];
+          _fAsignada = snap['asignada'];
         });
       }
     }
@@ -600,7 +621,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
       _fDeadlineRange = _fImporteRange = _fIngramEstado = null;
       _fCat1 = _fCat2 = _fCat3 = null;
       _fComunidad = _fMercado = _fTipoProcedimiento = _fDuracionRange = null;
-      _fDivision = null;
+      _fDivision = _fAsignada = null;
     });
     _load();
   }
