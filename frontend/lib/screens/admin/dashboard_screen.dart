@@ -299,17 +299,37 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               ),
             ),
 
-            // ── Row 2: Área tecnológica (unified tabbed card) ─────────────────
+            // ── Row 2: Área tecnológica 70% · Tipo procedimiento 30% ──────────
             SliverToBoxAdapter(
               child: _FadeSlide(
                 anim: _anim(2),
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-                  child: _CatTabbedCard(
-                    cat1: _stats!.breakdown.cat1,
-                    cat2: _stats!.breakdown.cat2,
-                    cat3: _stats!.breakdown.cat3,
-                    onNavigate: _nav,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        flex: 7,
+                        child: _CatTabbedCard(
+                          cat1: _stats!.breakdown.cat1,
+                          cat2: _stats!.breakdown.cat2,
+                          cat3: _stats!.breakdown.cat3,
+                          onNavigate: _nav,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        flex: 3,
+                        child: _DistCard(
+                          title: 'Tipo de procedimiento',
+                          icon: CupertinoIcons.doc_plaintext,
+                          iconColor: const Color(0xFF0891B2),
+                          items: _stats!.breakdown.tipoProcedimiento,
+                          total: _stats!.activas,
+                          onTap: (v, l) => _nav(LicitacionFilter(tipoProcedimiento: v, label: l)),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -357,24 +377,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                         ),
                       ),
                     ],
-                  ),
-                ),
-              ),
-            ),
-
-            // ── Row 4: Tipo de procedimiento ──────────────────────────────────
-            SliverToBoxAdapter(
-              child: _FadeSlide(
-                anim: _anim(4),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-                  child: _DistCard(
-                    title: 'Tipo de procedimiento',
-                    icon: CupertinoIcons.doc_plaintext,
-                    iconColor: const Color(0xFF0891B2),
-                    items: _stats!.breakdown.tipoProcedimiento,
-                    total: _stats!.activas,
-                    onTap: (_, _) {},
                   ),
                 ),
               ),
