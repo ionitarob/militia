@@ -1781,7 +1781,7 @@ class _OutlookButtonState extends State<_OutlookButton> {
               ),
               const SizedBox(width: 5),
               Text(
-                'Añadir a Outlook',
+                'Añadir a Calendario',
                 style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
