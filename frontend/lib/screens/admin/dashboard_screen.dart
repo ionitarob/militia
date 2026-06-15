@@ -280,6 +280,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                                 total: _stats!.activas,
                                 onTap: (v, l) => _nav(LicitacionFilter(ingramEstado: v, label: l)),
                                 teamActivity: _stats!.teamActivity,
+                                onMemberTap: (m) => _nav(LicitacionFilter(
+                                  assigneeUserId: m.userId,
+                                  label: m.displayName,
+                                )),
                               ),
                             ),
                           ],
@@ -1260,7 +1264,8 @@ class _FunnelCard extends StatefulWidget {
   final int total;
   final void Function(String, String) onTap;
   final List<TeamActivity> teamActivity;
-  const _FunnelCard({required this.stages, required this.total, required this.onTap, this.teamActivity = const []});
+  final void Function(TeamActivity)? onMemberTap;
+  const _FunnelCard({required this.stages, required this.total, required this.onTap, this.teamActivity = const [], this.onMemberTap});
   @override State<_FunnelCard> createState() => _FunnelCardState();
 }
 
@@ -1458,7 +1463,7 @@ class _FunnelCardState extends State<_FunnelCard> with SingleTickerProviderState
               runSpacing: 8,
               children: [
                 for (final m in widget.teamActivity)
-                  _TeamSquare(member: m),
+                  _TeamSquare(member: m, onTap: widget.onMemberTap != null ? () => widget.onMemberTap!(m) : null),
               ],
             ),
           ],
@@ -1472,7 +1477,8 @@ class _FunnelCardState extends State<_FunnelCard> with SingleTickerProviderState
 
 class _TeamSquare extends StatefulWidget {
   final TeamActivity member;
-  const _TeamSquare({required this.member});
+  final VoidCallback? onTap;
+  const _TeamSquare({required this.member, this.onTap});
   @override
   State<_TeamSquare> createState() => _TeamSquareState();
 }
@@ -1500,7 +1506,9 @@ class _TeamSquareState extends State<_TeamSquare> {
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
-      child: AnimatedContainer(
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
         duration: const Duration(milliseconds: 140),
         width: 76,
         height: 76,
@@ -1551,6 +1559,7 @@ class _TeamSquareState extends State<_TeamSquare> {
             ),
           ],
         ),
+      ),
       ),
     );
   }

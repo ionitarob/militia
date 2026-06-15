@@ -18,6 +18,7 @@ class LicitacionFilter {
   final String? reciente;
   final String? division;
   final String? asignada;
+  final int? assigneeUserId;
   final String label;
 
   const LicitacionFilter({
@@ -36,6 +37,7 @@ class LicitacionFilter {
     this.reciente,
     this.division,
     this.asignada,
+    this.assigneeUserId,
     required this.label,
   });
 
@@ -55,6 +57,7 @@ class LicitacionFilter {
     'reciente':                 ?reciente,
     'cotizacion_solicitada_a':  ?division,
     'asignada':                 ?asignada,
+    if (assigneeUserId != null) 'assignee_user_id': assigneeUserId.toString(),
   };
 }
 

@@ -111,7 +111,7 @@ fn list_sql(order_by: &str) -> String {
     //             $7=competencia $8=cat1 $9=cat2 $10=cat3
     //             $11=deadline_range $12=importe_range $13=duracion_range
     //             $14=pipeline_stage_filter  $15=reciente  $16=division
-    //             $17=asignada ('si'|'no')
+    //             $17=asignada ('si'|'no')  $18=assignee_user_id (int as text)
     format!(r#"
 SELECT
     l.id,
@@ -197,12 +197,13 @@ WHERE TRUE
   AND ($17::TEXT IS NULL
        OR ($17 = 'si'  AND la.assignee_id IS NOT NULL)
        OR ($17 = 'no'  AND la.assignee_id IS NULL))
+  AND ($18::INTEGER IS NULL OR la.assignee_id = $18::INTEGER)
 ORDER BY {order_by}
 LIMIT $1 OFFSET $2
 "#)
 }
 
-// Count query: $1-$8=text filters, $9-$11=range filters, $12=pipeline_stage_filter $13=reciente $14=division $15=asignada
+// Count query: $1-$8=text filters, $9-$11=range filters, $12=pipeline_stage_filter $13=reciente $14=division $15=asignada $16=assignee_user_id
 const COUNT_SQL: &str = r#"
 SELECT COUNT(*)::BIGINT
 FROM licitacion l
@@ -253,6 +254,7 @@ WHERE TRUE
   AND ($15::TEXT IS NULL
        OR ($15 = 'si'  AND la.assignee_id IS NOT NULL)
        OR ($15 = 'no'  AND la.assignee_id IS NULL))
+  AND ($16::INTEGER IS NULL OR la.assignee_id = $16::INTEGER)
 "#;
 
 // ── GET /licitaciones ─────────────────────────────────────────────────────────
@@ -282,6 +284,7 @@ pub async fn list(state: Arc<AppState>, event: Request) -> Result<Response<Body>
     let reciente            = params.first("reciente").map(|s| s.to_string());
     let division            = params.first("cotizacion_solicitada_a").map(|s| s.to_string());
     let asignada            = params.first("asignada").map(|s| s.to_string());
+    let assignee_user_id    = params.first("assignee_user_id").map(|s| s.to_string());
     let order_by            = params.first("order_by").unwrap_or("fecha_desc");
 
     let sql = list_sql(order_by);
@@ -303,6 +306,7 @@ pub async fn list(state: Arc<AppState>, event: Request) -> Result<Response<Body>
         .bind(reciente.as_deref())
         .bind(division.as_deref())
         .bind(asignada.as_deref())
+        .bind(assignee_user_id.as_deref())
         .fetch_all(&state.pool)
         .await
         .map_err(|e| format!("list query failed: {e}"))?;
@@ -323,6 +327,7 @@ pub async fn list(state: Arc<AppState>, event: Request) -> Result<Response<Body>
         .bind(reciente.as_deref())
         .bind(division.as_deref())
         .bind(asignada.as_deref())
+        .bind(assignee_user_id.as_deref())
         .fetch_one(&state.pool)
         .await
         .map_err(|e| format!("count query failed: {e}"))?;
