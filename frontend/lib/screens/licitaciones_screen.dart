@@ -1649,7 +1649,7 @@ class _LicitacionTileState extends State<_LicitacionTile>
         'DTSTAMP:${icsNow(now)}\r\n'
         'DTSTART;VALUE=DATE:${icsDate(dt)}\r\n'
         'DTEND;VALUE=DATE:${icsDate(endDt)}\r\n'
-        'SUMMARY:${l.titulo}\r\n'
+        'SUMMARY:⏰ Fecha límite: ${l.titulo}\r\n'
         'DESCRIPTION:$description\r\n'
         'END:VEVENT\r\n'
         'END:VCALENDAR\r\n';
