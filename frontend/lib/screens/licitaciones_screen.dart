@@ -1,7 +1,10 @@
+import 'dart:io';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart'
     show PopupMenuItem, RelativeRect, showMenu;
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../api/client.dart';
 import '../api/models.dart';
@@ -1619,21 +1622,42 @@ class _LicitacionTileState extends State<_LicitacionTile>
     );
   }
 
-  void _addToOutlook(Licitacion l) {
+  Future<void> _addToOutlook(Licitacion l) async {
     final deadline = l.fechaLimiteOferta ?? l.fecha;
     final dt = DateTime.tryParse(deadline) ?? DateTime.now();
-    final subject = Uri.encodeComponent(l.titulo);
-    final body = Uri.encodeComponent(
-      'Expediente: ${l.numeroExpediente}\n'
-      '${l.organismoNombre != null ? 'Organismo: ${l.organismoNombre}\n' : ''}'
-      '${l.importeLicitacion != null ? 'Importe: ${_fmtEur(l.importeLicitacion!)}\n' : ''}',
-    );
-    final url = Uri.parse(
-      'https://outlook.live.com/calendar/0/deeplink/compose'
-      '?subject=$subject&startdt=${dt.toIso8601String().substring(0, 10)}'
-      '&enddt=${dt.toIso8601String().substring(0, 10)}&body=$body&allday=true',
-    );
-    launchUrl(url, mode: LaunchMode.externalApplication);
+
+    // Format as YYYYMMDD for all-day ICS dates
+    String icsDate(DateTime d) =>
+        '${d.year}${d.month.toString().padLeft(2,'0')}${d.day.toString().padLeft(2,'0')}';
+    // End date is exclusive in ICS all-day events
+    final endDt = dt.add(const Duration(days: 1));
+    final now = DateTime.now().toUtc();
+    String icsNow(DateTime d) =>
+        '${icsDate(d)}T${d.hour.toString().padLeft(2,'0')}${d.minute.toString().padLeft(2,'0')}${d.second.toString().padLeft(2,'0')}Z';
+
+    final description = [
+      'Expediente: ${l.numeroExpediente}',
+      if (l.organismoNombre != null) 'Organismo: ${l.organismoNombre}',
+      if (l.importeLicitacion != null) 'Importe: ${_fmtEur(l.importeLicitacion!)}',
+    ].join('\\n');
+
+    final ics = 'BEGIN:VCALENDAR\r\n'
+        'VERSION:2.0\r\n'
+        'PRODID:-//IMLiti//ES\r\n'
+        'BEGIN:VEVENT\r\n'
+        'UID:licitacion-${l.id}@imliti\r\n'
+        'DTSTAMP:${icsNow(now)}\r\n'
+        'DTSTART;VALUE=DATE:${icsDate(dt)}\r\n'
+        'DTEND;VALUE=DATE:${icsDate(endDt)}\r\n'
+        'SUMMARY:${l.titulo}\r\n'
+        'DESCRIPTION:$description\r\n'
+        'END:VEVENT\r\n'
+        'END:VCALENDAR\r\n';
+
+    final tmp = await getTemporaryDirectory();
+    final file = File(p.join(tmp.path, 'licitacion_${l.id}.ics'));
+    await file.writeAsString(ics);
+    launchUrl(Uri.file(file.path), mode: LaunchMode.platformDefault);
   }
 }
 
