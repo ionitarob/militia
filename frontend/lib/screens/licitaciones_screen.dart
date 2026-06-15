@@ -270,6 +270,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
   String? _fDuracionRange;
   String? _fDivision;
   String? _fAsignada;
+  int? _fAssigneeUserId;
 
   // Dynamic options for CAT2/CAT3 (loaded from stats on init)
   List<_FO> _cat2Options = const [];
@@ -328,6 +329,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
     _fDuracionRange = f.duracionRange;
     _fDivision = f.division;
     _fAsignada = f.asignada;
+    _fAssigneeUserId = f.assigneeUserId;
   }
 
   LicitacionFilter? get _activeFilter {
@@ -343,7 +345,8 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
         _fTipoProcedimiento != null ||
         _fDuracionRange != null ||
         _fDivision != null ||
-        _fAsignada != null;
+        _fAsignada != null ||
+        _fAssigneeUserId != null;
     if (!hasAny) return null;
     return LicitacionFilter(
       deadlineRange: _fDeadlineRange,
@@ -358,6 +361,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
       duracionRange: _fDuracionRange,
       division: _fDivision,
       asignada: _fAsignada,
+      assigneeUserId: _fAssigneeUserId,
       label: _buildLabel(),
     );
   }
