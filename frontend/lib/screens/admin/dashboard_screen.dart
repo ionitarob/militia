@@ -281,7 +281,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                                 onTap: (v, l) => _nav(LicitacionFilter(ingramEstado: v, label: l)),
                                 teamActivity: _stats!.teamActivity,
                                 onMemberTap: (m) => _nav(LicitacionFilter(
-                                  assigneeUserId: m.userId,
+                                  assigneeUserIds: m.userId.toString(),
                                   label: m.displayName,
                                 )),
                               ),

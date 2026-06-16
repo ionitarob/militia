@@ -1,7 +1,5 @@
 import 'dart:io';
 import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart'
-    show PopupMenuItem, RelativeRect, showMenu;
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -273,11 +271,12 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
   String? _fDuracionRange;
   String? _fDivision;
   String? _fAsignada;
-  int? _fAssigneeUserId;
+  String? _fAssigneeUserIds;
 
   // Dynamic options for CAT2/CAT3 (loaded from stats on init)
   List<_FO> _cat2Options = const [];
   List<_FO> _cat3Options = const [];
+  List<AppUser> _salespeople = [];
 
   // Sort state
   String _sortBy = 'fecha_desc'; // default: newest first
@@ -297,7 +296,19 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
     _applyWidgetFilter();
     _load();
     _loadCatOptions();
+    _loadSalespeople();
     _scrollController.addListener(_onScroll);
+  }
+
+  Future<void> _loadSalespeople() async {
+    try {
+      final users = await _api.getUsers();
+      if (mounted) {
+        setState(() {
+          _salespeople = users.where((u) => u.role != 'admin').toList();
+        });
+      }
+    } catch (_) {}
   }
 
   Future<void> _loadCatOptions() async {
@@ -332,7 +343,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
     _fDuracionRange = f.duracionRange;
     _fDivision = f.division;
     _fAsignada = f.asignada;
-    _fAssigneeUserId = f.assigneeUserId;
+    _fAssigneeUserIds = f.assigneeUserIds;
   }
 
   LicitacionFilter? get _activeFilter {
@@ -349,7 +360,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
         _fDuracionRange != null ||
         _fDivision != null ||
         _fAsignada != null ||
-        _fAssigneeUserId != null;
+        _fAssigneeUserIds != null;
     if (!hasAny) return null;
     return LicitacionFilter(
       deadlineRange: _fDeadlineRange,
@@ -364,7 +375,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
       duracionRange: _fDuracionRange,
       division: _fDivision,
       asignada: _fAsignada,
-      assigneeUserId: _fAssigneeUserId,
+      assigneeUserIds: _fAssigneeUserIds,
       label: _buildLabel(),
     );
   }
@@ -377,9 +388,9 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
       parts.add(_labelFor('importeRange', _fImporteRange!));
     if (_fIngramEstado != null)
       parts.add(_labelFor('ingramEstado', _fIngramEstado!));
-    if (_fCat1 != null) parts.add(_fCat1!);
-    if (_fCat2 != null) parts.add(_fCat2!);
-    if (_fCat3 != null) parts.add(_fCat3!);
+    if (_fCat1 != null) parts.add(_labelFor('cat1', _fCat1!));
+    if (_fCat2 != null) parts.add(_labelFor('cat2', _fCat2!));
+    if (_fCat3 != null) parts.add(_labelFor('cat3', _fCat3!));
     if (_fComunidad != null) parts.add(_labelFor('comunidad', _fComunidad!));
     if (_fMercado != null) parts.add(_labelFor('mercado', _fMercado!));
     if (_fTipoProcedimiento != null)
@@ -387,14 +398,52 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
     if (_fDuracionRange != null)
       parts.add(_labelFor('duracionRange', _fDuracionRange!));
     if (_fDivision != null) parts.add(_labelFor('division', _fDivision!));
-    if (_fAsignada != null) parts.add(_labelFor('asignada', _fAsignada!));
+    if (_fAsignada != null) {
+      if (_fAsignada == 'no') {
+        parts.add('Sin asignar');
+      } else if (_fAsignada == 'si') {
+        if (_fAssigneeUserIds != null) {
+          parts.add(_labelFor('asignada', _fAssigneeUserIds!));
+        } else {
+          parts.add('Asignada');
+        }
+      }
+    }
     return parts.join(' · ');
   }
 
   String _labelFor(String key, String value) {
+    if (value.contains(',')) {
+      final parts = value.split(',');
+      final translated = parts.map((p) => _singleLabelFor(key, p)).toList();
+      if (translated.length <= 2) {
+        return translated.join(', ');
+      }
+      return '${translated.length} sel.';
+    }
+    return _singleLabelFor(key, value);
+  }
+
+  String _singleLabelFor(String key, String value) {
+    if (key == 'asignada') {
+      if (value == 'no') return 'Sin asignar';
+      if (value == 'si') return 'Asignada';
+      final parsedId = int.tryParse(value);
+      if (parsedId != null) {
+        final match = _salespeople.where((u) => u.id == parsedId).firstOrNull;
+        if (match != null) return match.displayName;
+      }
+    }
+    final extra = {
+      'cat2': _cat2Options,
+      'cat3': _cat3Options,
+    }[key];
+    if (extra != null) {
+      final match = extra.where((o) => o.value == value).firstOrNull;
+      if (match != null) return match.label;
+    }
     final cat = _filterCategories.where((c) => c.key == key).firstOrNull;
-    if (cat == null) return value;
-    return cat.options.where((o) => o.value == value).firstOrNull?.label ??
+    return cat?.options.where((o) => o.value == value).firstOrNull?.label ??
         value;
   }
 
@@ -544,6 +593,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
       'duracionRange': _fDuracionRange,
       'division': _fDivision,
       'asignada': _fAsignada,
+      'assigneeUserIds': _fAssigneeUserIds,
     };
 
     final apply = await showCupertinoModalPopup<bool>(
@@ -562,6 +612,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
           'duracionRange': _fDuracionRange,
           'division': _fDivision,
           'asignada': _fAsignada,
+          'assigneeUserIds': _fAssigneeUserIds,
         },
         extraOptions: {
           'cat2': _cat2Options,
@@ -594,6 +645,8 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
                 _fDivision = value;
               case 'asignada':
                 _fAsignada = value;
+              case 'assigneeUserIds':
+                _fAssigneeUserIds = value;
             }
           });
         },
@@ -618,6 +671,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
           _fDuracionRange = snap['duracionRange'];
           _fDivision = snap['division'];
           _fAsignada = snap['asignada'];
+          _fAssigneeUserIds = snap['assigneeUserIds'];
         });
       }
     }
@@ -628,7 +682,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
       _fDeadlineRange = _fImporteRange = _fIngramEstado = null;
       _fCat1 = _fCat2 = _fCat3 = null;
       _fComunidad = _fMercado = _fTipoProcedimiento = _fDuracionRange = null;
-      _fDivision = _fAsignada = null;
+      _fDivision = _fAsignada = _fAssigneeUserIds = null;
     });
     _load();
   }
@@ -901,14 +955,29 @@ class _FilterSheet extends StatefulWidget {
 
 class _FilterSheetState extends State<_FilterSheet> {
   late Map<String, String?> _values;
+  List<AppUser> _salespeople = [];
 
   @override
   void initState() {
     super.initState();
     _values = Map.from(widget.initial);
+    _loadSalespeople();
   }
 
-  int get _count => _values.values.where((v) => v != null).length;
+  Future<void> _loadSalespeople() async {
+    try {
+      final users = await ApiClient().getUsers();
+      if (mounted) {
+        setState(() {
+          _salespeople = users.where((u) => u.role != 'admin').toList();
+        });
+      }
+    } catch (_) {}
+  }
+
+  int get _count => _values.entries
+      .where((e) => e.value != null && e.key != 'assigneeUserIds')
+      .length;
 
   // Show CAT2 only when CAT1 is selected; CAT3 only when CAT2 is selected.
   List<_FC> get _visibleCategories {
@@ -926,6 +995,27 @@ class _FilterSheetState extends State<_FilterSheet> {
   }
 
   String _labelFor(String key, String value) {
+    if (value.contains(',')) {
+      final parts = value.split(',');
+      final translated = parts.map((p) => _singleLabelFor(key, p)).toList();
+      if (translated.length <= 2) {
+        return translated.join(', ');
+      }
+      return '${translated.length} sel.';
+    }
+    return _singleLabelFor(key, value);
+  }
+
+  String _singleLabelFor(String key, String value) {
+    if (key == 'asignada') {
+      if (value == 'no') return 'Sin asignar';
+      if (value == 'si') return 'Asignada';
+      final parsedId = int.tryParse(value);
+      if (parsedId != null) {
+        final match = _salespeople.where((u) => u.id == parsedId).firstOrNull;
+        if (match != null) return match.displayName;
+      }
+    }
     final extra = widget.extraOptions[key];
     if (extra != null) {
       final match = extra.where((o) => o.value == value).firstOrNull;
@@ -957,93 +1047,60 @@ class _FilterSheetState extends State<_FilterSheet> {
   }
 
   Future<void> _pickCategory(BuildContext rowCtx, _FC cat) async {
-    final options = _optionsFor(cat);
+    List<_FO> options = _optionsFor(cat);
+    if (cat.key == 'asignada') {
+      options = [
+        const _FO('Sin asignar', 'no'),
+        ..._salespeople.map((u) => _FO(u.displayName, u.id.toString())),
+      ];
+    }
     if (options.isEmpty) return;
-    final current = _values[cat.key];
-    final box = rowCtx.findRenderObject() as RenderBox?;
-    if (box == null) return;
-    final overlay =
-        Navigator.of(rowCtx).overlay!.context.findRenderObject() as RenderBox;
-    final topLeft = box.localToGlobal(Offset.zero, ancestor: overlay);
-    final rect = topLeft & box.size;
-    final overlaySize = overlay.size;
-    // Anchor at the right edge of the row so the menu expands leftward,
-    // aligning with the "Todos >" chevron instead of the row's left edge.
-    final rightInset = overlaySize.width - rect.right;
-    final position = RelativeRect.fromLTRB(
-      rect.right,   // left inset = right edge of row (forces leftward expansion)
-      rect.top,
-      rightInset,
-      overlaySize.height - rect.bottom,
+
+    var currentVal = _values[cat.key];
+    if (cat.key == 'asignada') {
+      if (_values['asignada'] == 'no') {
+        currentVal = 'no';
+      } else if (_values['asignada'] == 'si') {
+        currentVal = _values['assigneeUserIds'] ?? 'si';
+      }
+    }
+
+    final selectedSet = currentVal == null || currentVal.isEmpty
+        ? <String>{}
+        : currentVal.split(',').toSet();
+
+    final result = await showCupertinoModalPopup<Set<String>>(
+      context: context,
+      builder: (ctx) => _MultiSelectCategoryPicker(
+        title: cat.title,
+        options: options,
+        selectedValues: selectedSet,
+      ),
     );
-    final picked = await showMenu<String>(
-      context: rowCtx,
-      position: position,
-      color: const Color(0xFFFFFFFF),
-      elevation: 12,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      constraints: const BoxConstraints(minWidth: 220, maxWidth: 340),
-      items: [
-        if (current != null)
-          PopupMenuItem<String>(
-            value: '',
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: const Row(
-              children: [
-                Icon(
-                  CupertinoIcons.xmark_circle,
-                  size: 14,
-                  color: Color(0xFFDC2626),
-                ),
-                SizedBox(width: 10),
-                Text(
-                  'Quitar filtro',
-                  style: TextStyle(color: Color(0xFFDC2626), fontSize: 13),
-                ),
-              ],
-            ),
-          ),
-        ...options.map(
-          (o) => PopupMenuItem<String>(
-            value: o.value,
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 18,
-                  child: o.value == current
-                      ? const Icon(
-                          CupertinoIcons.checkmark,
-                          size: 13,
-                          color: Color(0xFF2563EB),
-                        )
-                      : null,
-                ),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Text(
-                    o.label,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: o.value == current
-                          ? FontWeight.w600
-                          : FontWeight.w400,
-                      color: o.value == current
-                          ? const Color(0xFF2563EB)
-                          : const Color(0xFF111827),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-    if (picked == null) return;
-    final newVal = picked.isEmpty ? null : picked;
+
+    if (result == null) return;
+
     setState(() {
-      _values[cat.key] = newVal;
+      if (result.isEmpty) {
+        _values[cat.key] = null;
+        if (cat.key == 'asignada') {
+          _values['asignada'] = null;
+          _values['assigneeUserIds'] = null;
+        }
+      } else {
+        if (cat.key == 'asignada') {
+          if (result.contains('no')) {
+            _values['asignada'] = 'no';
+            _values['assigneeUserIds'] = null;
+          } else {
+            _values['asignada'] = 'si';
+            _values['assigneeUserIds'] = result.join(',');
+          }
+        } else {
+          _values[cat.key] = result.join(',');
+        }
+      }
+
       // Cascade: changing CAT1 clears CAT2+CAT3; changing CAT2 clears CAT3.
       if (cat.key == 'cat1') {
         _values['cat2'] = null;
@@ -1052,12 +1109,18 @@ class _FilterSheetState extends State<_FilterSheet> {
         _values['cat3'] = null;
       }
     });
-    widget.onChanged(cat.key, newVal);
-    if (cat.key == 'cat1') {
-      widget.onChanged('cat2', null);
-      widget.onChanged('cat3', null);
-    } else if (cat.key == 'cat2') {
-      widget.onChanged('cat3', null);
+
+    if (cat.key == 'asignada') {
+      widget.onChanged('asignada', _values['asignada']);
+      widget.onChanged('assigneeUserIds', _values['assigneeUserIds']);
+    } else {
+      widget.onChanged(cat.key, _values[cat.key]);
+      if (cat.key == 'cat1') {
+        widget.onChanged('cat2', null);
+        widget.onChanged('cat3', null);
+      } else if (cat.key == 'cat2') {
+        widget.onChanged('cat3', null);
+      }
     }
   }
 
@@ -1070,6 +1133,7 @@ class _FilterSheetState extends State<_FilterSheet> {
     for (final cat in _filterCategories) {
       widget.onChanged(cat.key, null);
     }
+    widget.onChanged('assigneeUserIds', null);
   }
 
   @override
@@ -1171,7 +1235,14 @@ class _FilterSheetState extends State<_FilterSheet> {
                       children: List.generate(_visibleCategories.length, (i) {
                         final cats = _visibleCategories;
                         final cat = cats[i];
-                        final val = _values[cat.key];
+                        var val = _values[cat.key];
+                        if (cat.key == 'asignada') {
+                          if (_values['asignada'] == 'no') {
+                            val = 'no';
+                          } else if (_values['asignada'] == 'si') {
+                            val = _values['assigneeUserIds'] ?? 'si';
+                          }
+                        }
                         final isLast = i == cats.length - 1;
                         return Column(
                           children: [
@@ -1332,6 +1403,162 @@ class _FilterSheetState extends State<_FilterSheet> {
                   ),
                 ],
               ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MultiSelectCategoryPicker extends StatefulWidget {
+  final String title;
+  final List<_FO> options;
+  final Set<String> selectedValues;
+
+  const _MultiSelectCategoryPicker({
+    required this.title,
+    required this.options,
+    required this.selectedValues,
+  });
+
+  @override
+  State<_MultiSelectCategoryPicker> createState() => _MultiSelectCategoryPickerState();
+}
+
+class _MultiSelectCategoryPickerState extends State<_MultiSelectCategoryPicker> {
+  late Set<String> _tempSelected;
+  String _searchQuery = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _tempSelected = Set.from(widget.selectedValues);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final filteredOptions = widget.options.where((o) {
+      if (_searchQuery.isEmpty) return true;
+      return o.label.toLowerCase().contains(_searchQuery.toLowerCase());
+    }).toList();
+
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.7,
+      decoration: const BoxDecoration(
+        color: _white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(
+        children: [
+          // Drag handle
+          Center(
+            child: Container(
+              width: 36,
+              height: 4,
+              margin: const EdgeInsets.only(top: 12, bottom: 8),
+              decoration: BoxDecoration(
+                color: _border,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          // Header
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+            child: Row(
+              children: [
+                Text(
+                  widget.title,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: _navy,
+                  ),
+                ),
+                const Spacer(),
+                CupertinoButton(
+                  padding: EdgeInsets.zero,
+                  minimumSize: Size.zero,
+                  onPressed: () => Navigator.pop(context, _tempSelected),
+                  child: const Text(
+                    'Listo',
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: _blue,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Search bar for categories with > 8 options
+          if (widget.options.length > 8)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              child: CupertinoSearchTextField(
+                placeholder: 'Buscar...',
+                onChanged: (v) => setState(() => _searchQuery = v),
+              ),
+            ),
+          // List of options
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+              itemCount: filteredOptions.length,
+              itemBuilder: (context, index) {
+                final o = filteredOptions[index];
+                final isSelected = _tempSelected.contains(o.value);
+                return GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      if (isSelected) {
+                        _tempSelected.remove(o.value);
+                      } else {
+                        if (widget.title == 'Asignación') {
+                          if (o.value == 'no') {
+                            _tempSelected.clear();
+                          } else {
+                            _tempSelected.remove('no');
+                          }
+                        }
+                        _tempSelected.add(o.value);
+                      }
+                    });
+                  },
+                  behavior: HitTestBehavior.opaque,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+                    decoration: const BoxDecoration(
+                      border: Border(
+                        bottom: BorderSide(color: _border, width: 0.5),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            o.label,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                              color: isSelected ? _blue : _ink,
+                            ),
+                          ),
+                        ),
+                        Icon(
+                          isSelected
+                              ? CupertinoIcons.checkmark_square_fill
+                              : CupertinoIcons.square,
+                          color: isSelected ? _blue : _muted,
+                          size: 20,
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
             ),
           ),
         ],
@@ -1549,8 +1776,7 @@ class _LicitacionTileState extends State<_LicitacionTile>
                               ),
                               // Estado + assignee footer
                               if (l.ingramEstado != null ||
-                                  l.ingramOwner != null ||
-                                  l.assigneeNombre != null) ...[
+                                  l.assignees.isNotEmpty) ...[
                                 const SizedBox(height: 9),
                                 Row(
                                   children: [
@@ -1581,8 +1807,7 @@ class _LicitacionTileState extends State<_LicitacionTile>
                                         ),
                                       ),
                                     const Spacer(),
-                                    if (l.ingramOwner != null ||
-                                        l.assigneeNombre != null) ...[
+                                    if (l.assignees.isNotEmpty) ...[
                                       const Icon(
                                         CupertinoIcons.person_circle_fill,
                                         size: 13,
@@ -1590,16 +1815,12 @@ class _LicitacionTileState extends State<_LicitacionTile>
                                       ),
                                       const SizedBox(width: 4),
                                       Text(
-                                        (l.ingramOwner ??
-                                                l.assigneeNombre ??
-                                                '')
-                                            .split(' ')
-                                            .first,
-                                        style: TextStyle(
+                                        l.assignees
+                                            .map((a) => a.displayName.split(' ').first)
+                                            .join(' · '),
+                                        style: const TextStyle(
                                           fontSize: 11,
-                                          color: l.ingramOwner != null
-                                              ? _blue
-                                              : _muted,
+                                          color: _muted,
                                           fontWeight: FontWeight.w500,
                                         ),
                                       ),

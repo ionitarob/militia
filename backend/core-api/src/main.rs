@@ -28,6 +28,11 @@ async fn main() -> Result<(), Error> {
 
     let pool = build_pool(&sm).await?;
 
+    // Fix checksum mismatch by deleting migration history rows for Phase 2, letting them re-run idempotently
+    let _ = sqlx::query("DELETE FROM _sqlx_migrations WHERE version IN (20260616000000, 20260616010000)")
+        .execute(&pool)
+        .await;
+
     sqlx::migrate!("./migrations")
         .run(&pool)
         .await

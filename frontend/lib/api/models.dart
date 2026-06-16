@@ -18,7 +18,7 @@ class LicitacionFilter {
   final String? reciente;
   final String? division;
   final String? asignada;
-  final int? assigneeUserId;
+  final String? assigneeUserIds;
   final String label;
 
   const LicitacionFilter({
@@ -37,7 +37,7 @@ class LicitacionFilter {
     this.reciente,
     this.division,
     this.asignada,
-    this.assigneeUserId,
+    this.assigneeUserIds,
     required this.label,
   });
 
@@ -57,11 +57,23 @@ class LicitacionFilter {
     'reciente':                 ?reciente,
     'cotizacion_solicitada_a':  ?division,
     'asignada':                 ?asignada,
-    if (assigneeUserId != null) 'assignee_user_id': assigneeUserId.toString(),
+    if (assigneeUserIds != null) 'assignee_user_ids': assigneeUserIds!,
   };
 }
 
 // ── Licitacion ────────────────────────────────────────────────────────────────
+
+class LicitacionAssignee {
+  final int id;
+  final String? nombre;
+
+  const LicitacionAssignee({required this.id, this.nombre});
+
+  factory LicitacionAssignee.fromJson(Map<String, dynamic> j) =>
+      LicitacionAssignee(id: j['id'] as int, nombre: j['nombre'] as String?);
+
+  String get displayName => nombre ?? 'Usuario $id';
+}
 
 class Licitacion {
   final int id;
@@ -85,11 +97,14 @@ class Licitacion {
   final int? puntosMejoras;
   final int? puntosSubjetivos;
   final String? cpvLabel;
-  final int? assigneeId;
-  final String? assigneeNombre;
+  final List<LicitacionAssignee> assignees;
   final String? ingramEstado;
   final String? ingramOwner;
   final String? cotizacionSolicitadaA;
+  final bool fabricanteProteccion;
+  final String? fabricanteNombre;
+  final String? motivoPerdida;
+  final String? motivoPerdidaTexto;
   final String? organismoNombre;
 
   const Licitacion({
@@ -114,13 +129,21 @@ class Licitacion {
     this.puntosMejoras,
     this.puntosSubjetivos,
     this.cpvLabel,
-    this.assigneeId,
-    this.assigneeNombre,
+    this.assignees = const [],
     this.ingramEstado,
     this.ingramOwner,
     this.cotizacionSolicitadaA,
+    this.fabricanteProteccion = false,
+    this.fabricanteNombre,
+    this.motivoPerdida,
+    this.motivoPerdidaTexto,
     this.organismoNombre,
   });
+
+  // Convenience: first assignee's name (for list display)
+  String? get assigneeNombre =>
+      assignees.isEmpty ? null : assignees.first.displayName;
+  int? get assigneeId => assignees.isEmpty ? null : assignees.first.id;
 
   factory Licitacion.fromJson(Map<String, dynamic> j) => Licitacion(
         id: j['id'] as int,
@@ -146,21 +169,29 @@ class Licitacion {
         puntosMejoras: j['puntos_mejoras'] as int?,
         puntosSubjetivos: j['puntos_subjetivos'] as int?,
         cpvLabel: j['cpv_label'] as String?,
-        assigneeId: j['assignee_id'] as int?,
-        assigneeNombre: j['assignee_nombre'] as String?,
+        assignees: (j['assignees'] as List? ?? [])
+            .map((e) => LicitacionAssignee.fromJson(e as Map<String, dynamic>))
+            .toList(),
         ingramEstado: j['ingram_estado'] as String?,
         ingramOwner: j['ingram_owner'] as String?,
         cotizacionSolicitadaA: j['cotizacion_solicitada_a'] as String?,
+        fabricanteProteccion: j['fabricante_proteccion'] as bool? ?? false,
+        fabricanteNombre: j['fabricante_nombre'] as String?,
+        motivoPerdida: j['motivo_perdida'] as String?,
+        motivoPerdidaTexto: j['motivo_perdida_texto'] as String?,
         organismoNombre: j['organismo_nombre'] as String?,
       );
 
   Licitacion copyWith({
     String? pipelineStage,
-    int? Function()? assigneeId,
-    String? Function()? assigneeNombre,
+    List<LicitacionAssignee>? assignees,
     String? Function()? ingramEstado,
     String? Function()? ingramOwner,
     String? Function()? cotizacionSolicitadaA,
+    bool? fabricanteProteccion,
+    String? Function()? fabricanteNombre,
+    String? Function()? motivoPerdida,
+    String? Function()? motivoPerdidaTexto,
   }) => Licitacion(
         id: id,
         fecha: fecha,
@@ -183,13 +214,16 @@ class Licitacion {
         puntosMejoras: puntosMejoras,
         puntosSubjetivos: puntosSubjetivos,
         cpvLabel: cpvLabel,
-        assigneeId: assigneeId != null ? assigneeId() : this.assigneeId,
-        assigneeNombre: assigneeNombre != null ? assigneeNombre() : this.assigneeNombre,
+        assignees: assignees ?? this.assignees,
         ingramEstado: ingramEstado != null ? ingramEstado() : this.ingramEstado,
         ingramOwner: ingramOwner != null ? ingramOwner() : this.ingramOwner,
         cotizacionSolicitadaA: cotizacionSolicitadaA != null
             ? cotizacionSolicitadaA()
             : this.cotizacionSolicitadaA,
+        fabricanteProteccion: fabricanteProteccion ?? this.fabricanteProteccion,
+        fabricanteNombre: fabricanteNombre != null ? fabricanteNombre() : this.fabricanteNombre,
+        motivoPerdida: motivoPerdida != null ? motivoPerdida() : this.motivoPerdida,
+        motivoPerdidaTexto: motivoPerdidaTexto != null ? motivoPerdidaTexto() : this.motivoPerdidaTexto,
         organismoNombre: organismoNombre,
       );
 }
@@ -223,24 +257,51 @@ class ClienteCotizacion {
   final String clienteNombre;
   final String? cotizacionXv;
   final String? oportunidad;
+  final String? estado;
+  final String? division;
+  final bool fabricanteProteccion;
+  final String? fabricanteNombre;
+  final bool? vaConPliego;
 
   const ClienteCotizacion({
     required this.clienteNombre,
     this.cotizacionXv,
     this.oportunidad,
+    this.estado,
+    this.division,
+    this.fabricanteProteccion = false,
+    this.fabricanteNombre,
+    this.vaConPliego,
   });
 
   factory ClienteCotizacion.fromJson(Map<String, dynamic> j) => ClienteCotizacion(
-        clienteNombre: j['cliente_nombre'] as String,
-        cotizacionXv:  j['cotizacion_xv'] as String?,
-        oportunidad:   j['oportunidad'] as String?,
+        clienteNombre:        j['cliente_nombre'] as String,
+        cotizacionXv:         j['cotizacion_xv'] as String?,
+        oportunidad:          j['oportunidad'] as String?,
+        estado:               j['estado'] as String?,
+        division:             j['division'] as String?,
+        fabricanteProteccion: j['fabricante_proteccion'] as bool? ?? false,
+        fabricanteNombre:     j['fabricante_nombre'] as String?,
+        vaConPliego:          j['va_con_pliego'] as bool?,
       );
 
-  ClienteCotizacion copyWith({String? cotizacionXv, String? oportunidad}) =>
-      ClienteCotizacion(
-        clienteNombre: clienteNombre,
-        cotizacionXv: cotizacionXv ?? this.cotizacionXv,
-        oportunidad: oportunidad ?? this.oportunidad,
+  ClienteCotizacion copyWith({
+    String? cotizacionXv,
+    String? oportunidad,
+    String? estado,
+    String? division,
+    bool? fabricanteProteccion,
+    String? fabricanteNombre,
+    bool? Function()? vaConPliego,
+  }) => ClienteCotizacion(
+        clienteNombre:        clienteNombre,
+        cotizacionXv:         cotizacionXv ?? this.cotizacionXv,
+        oportunidad:          oportunidad ?? this.oportunidad,
+        estado:               estado ?? this.estado,
+        division:             division ?? this.division,
+        fabricanteProteccion: fabricanteProteccion ?? this.fabricanteProteccion,
+        fabricanteNombre:     fabricanteNombre ?? this.fabricanteNombre,
+        vaConPliego:          vaConPliego != null ? vaConPliego() : this.vaConPliego,
       );
 }
 
@@ -645,3 +706,25 @@ class WorkloadUser {
             .toList(),
       );
 }
+
+class StageHistoryItem {
+  final int id;
+  final String stage;
+  final String changedAt;
+  final String? userNombre;
+
+  const StageHistoryItem({
+    required this.id,
+    required this.stage,
+    required this.changedAt,
+    this.userNombre,
+  });
+
+  factory StageHistoryItem.fromJson(Map<String, dynamic> j) => StageHistoryItem(
+        id: j['id'] as int,
+        stage: j['stage'] as String,
+        changedAt: j['changed_at'] as String,
+        userNombre: j['user_nombre'] as String?,
+      );
+}
+

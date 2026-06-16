@@ -31,6 +31,8 @@ pub struct DeclineReq {
 #[derive(Deserialize)]
 pub struct StageReq {
     pub stage: String,
+    pub motivo_perdida: Option<String>,
+    pub motivo_perdida_texto: Option<String>,
 }
 
 // ── POST /licitaciones/{id}/assign  (admin only) ───────────────────────────────
@@ -48,37 +50,87 @@ pub async fn assign(
         return json(403, r#"{"error":"Solo puedes asignarte licitaciones a ti mismo"}"#);
     }
 
-    // Deactivate existing active assignment
-    sqlx::query(
-        "UPDATE licitacion_assignment SET active = FALSE
-         WHERE licitacion_id = $1 AND active = TRUE",
-    )
-    .bind(lic_id)
-    .execute(&state.pool)
-    .await
-    .map_err(|e| format!("db: {e}"))?;
-
-    // Insert new assignment
-    sqlx::query(
-        "INSERT INTO licitacion_assignment (licitacion_id, assignee_id, assigned_by)
-         VALUES ($1, $2, $3)",
+    // Idempotent: only insert if not already assigned
+    let already: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM licitacion_assignment \
+         WHERE licitacion_id = $1 AND assignee_id = $2 AND active = TRUE)",
     )
     .bind(lic_id)
     .bind(req.assignee_id)
-    .bind(claims.sub)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| format!("db: {e}"))?;
+
+    if !already {
+        sqlx::query(
+            "INSERT INTO licitacion_assignment (licitacion_id, assignee_id, assigned_by)
+             VALUES ($1, $2, $3)",
+        )
+        .bind(lic_id)
+        .bind(req.assignee_id)
+        .bind(claims.sub)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| format!("db: {e}"))?;
+
+        // Advance pipeline to 'asignada' if still 'nueva'
+        sqlx::query(
+            "UPDATE licitacion SET pipeline_stage = 'asignada'
+             WHERE id = $1 AND pipeline_stage = 'nueva'",
+        )
+        .bind(lic_id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| format!("db: {e}"))?;
+    }
+
+    json(200, r#"{"ok":true}"#)
+}
+
+// ── POST /licitaciones/{id}/unassign ──────────────────────────────────────────
+
+pub async fn unassign(
+    state: Arc<AppState>,
+    event: Request,
+    lic_id: i64,
+) -> Result<Response<Body>, Error> {
+    let claims = bail!(require_auth(&event, &state.jwt_secret));
+    let req    = bail!(parse_body::<AssignReq>(&event));
+
+    if claims.role != "admin" && req.assignee_id != claims.sub {
+        return json(403, r#"{"error":"Solo puedes desasignarte a ti mismo"}"#);
+    }
+
+    sqlx::query(
+        "UPDATE licitacion_assignment SET active = FALSE
+         WHERE licitacion_id = $1 AND assignee_id = $2 AND active = TRUE",
+    )
+    .bind(lic_id)
+    .bind(req.assignee_id)
     .execute(&state.pool)
     .await
     .map_err(|e| format!("db: {e}"))?;
 
-    // Advance pipeline to 'asignada'
-    sqlx::query(
-        "UPDATE licitacion SET pipeline_stage = 'asignada'
-         WHERE id = $1 AND pipeline_stage = 'nueva'",
+    // If no active assignees remain, revert stage to 'nueva'
+    let remaining: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM licitacion_assignment \
+         WHERE licitacion_id = $1 AND active = TRUE",
     )
     .bind(lic_id)
-    .execute(&state.pool)
+    .fetch_one(&state.pool)
     .await
     .map_err(|e| format!("db: {e}"))?;
+
+    if remaining == 0 {
+        sqlx::query(
+            "UPDATE licitacion SET pipeline_stage = 'nueva'
+             WHERE id = $1 AND pipeline_stage = 'asignada'",
+        )
+        .bind(lic_id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| format!("db: {e}"))?;
+    }
 
     json(200, r#"{"ok":true}"#)
 }
@@ -215,6 +267,33 @@ pub async fn update_stage(
     .execute(&state.pool)
     .await
     .map_err(|e| format!("db: {e}"))?;
+
+    // Record stage change in history
+    sqlx::query(
+        "INSERT INTO licitacion_stage_history (licitacion_id, stage, changed_by)
+         VALUES ($1, $2, $3)",
+    )
+    .bind(lic_id)
+    .bind(&req.stage)
+    .bind(claims.sub)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| format!("db history: {e}"))?;
+
+    // When marked as lost, store the rejection reason
+    if req.stage == "perdida" {
+        sqlx::query(
+            "UPDATE licitacion
+             SET motivo_perdida = $2, motivo_perdida_texto = $3
+             WHERE id = $1",
+        )
+        .bind(lic_id)
+        .bind(req.motivo_perdida.as_deref())
+        .bind(req.motivo_perdida_texto.as_deref())
+        .execute(&state.pool)
+        .await
+        .map_err(|e| format!("db motivo: {e}"))?;
+    }
 
     json(200, r#"{"ok":true}"#)
 }
@@ -662,14 +741,22 @@ pub async fn my_licitaciones(
             l.ingram_estado,
             l.ingram_owner,
             l.cotizacion_solicitada_a,
-            la.assignee_id,
-            u.nombre                                  AS assignee_nombre,
+            l.fabricante_proteccion,
+            l.fabricante_nombre,
+            l.motivo_perdida,
+            l.motivo_perdida_texto,
+            COALESCE(
+                (SELECT JSON_AGG(JSON_BUILD_OBJECT('id', u2.id, 'nombre', u2.nombre) ORDER BY u2.nombre)
+                 FROM licitacion_assignment la2
+                 JOIN app_user u2 ON u2.id = la2.assignee_id
+                 WHERE la2.licitacion_id = l.id AND la2.active = TRUE),
+                '[]'::JSON
+            )::TEXT                                   AS assignees_json,
             o.nombre                                  AS organismo_nombre
         FROM licitacion l
-        JOIN licitacion_assignment la ON la.licitacion_id = l.id AND la.active = TRUE
-        LEFT JOIN app_user u     ON u.id = la.assignee_id
+        JOIN licitacion_assignment la
+            ON la.licitacion_id = l.id AND la.assignee_id = $1 AND la.active = TRUE
         LEFT JOIN organismo o    ON o.id = l.organismo_id
-        WHERE la.assignee_id = $1
         ORDER BY l.fecha_limite_oferta ASC NULLS LAST, l.id DESC
         "#,
     )
@@ -744,6 +831,86 @@ pub async fn team_workload(
 
     let result: Vec<serde_json::Value> = order.iter().map(|id| map.remove(id).unwrap()).collect();
     json(200, &serde_json::json!(result).to_string())
+}
+
+// ── GET /licitaciones/{id}/stage-history ──────────────────────────────────────
+
+#[derive(serde::Serialize, sqlx::FromRow)]
+pub struct StageHistoryItem {
+    pub id: i64,
+    pub stage: String,
+    pub changed_at: chrono::DateTime<chrono::Utc>,
+    pub user_nombre: Option<String>,
+}
+
+pub async fn get_stage_history(
+    state: Arc<AppState>,
+    _event: Request,
+    lic_id: i64,
+) -> Result<Response<Body>, Error> {
+    let rows = sqlx::query_as::<_, StageHistoryItem>(
+        "SELECT h.id, h.stage, h.changed_at, u.nombre AS user_nombre
+         FROM licitacion_stage_history h
+         LEFT JOIN app_user u ON u.id = h.changed_by
+         WHERE h.licitacion_id = $1
+         ORDER BY h.changed_at DESC",
+    )
+    .bind(lic_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| format!("db stage history: {e}"))?;
+
+    json(200, &serde_json::to_string(&rows)?)
+}
+
+// ── PATCH /licitaciones/{id}/fabricante ───────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+pub struct FabricanteReq {
+    pub fabricante_proteccion: bool,
+    pub fabricante_nombre: Option<String>,
+}
+
+pub async fn update_fabricante(
+    state: Arc<AppState>,
+    event: Request,
+    lic_id: i64,
+) -> Result<Response<Body>, Error> {
+    let claims = bail!(require_auth(&event, &state.jwt_secret));
+    let req    = bail!(parse_body::<FabricanteReq>(&event));
+
+    // Vendedores can only update if assigned
+    if claims.role != "admin" {
+        let assigned: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+               SELECT 1 FROM licitacion_assignment
+               WHERE licitacion_id = $1 AND assignee_id = $2 AND active = TRUE
+             )",
+        )
+        .bind(lic_id)
+        .bind(claims.sub)
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|e| format!("db: {e}"))?;
+
+        if !assigned {
+            return Ok(auth::unauthorized("No tienes acceso a esta licitación"));
+        }
+    }
+
+    sqlx::query(
+        "UPDATE licitacion 
+         SET fabricante_proteccion = $2, fabricante_nombre = $3
+         WHERE id = $1",
+    )
+    .bind(lic_id)
+    .bind(req.fabricante_proteccion)
+    .bind(req.fabricante_nombre.as_deref())
+    .execute(&state.pool)
+    .await
+    .map_err(|e| format!("db: {e}"))?;
+
+    json(200, r#"{"ok":true}"#)
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

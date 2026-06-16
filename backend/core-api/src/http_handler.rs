@@ -54,14 +54,24 @@ pub async fn handle(state: Arc<AppState>, event: Request) -> Result<Response<Bod
                 return routes::pipeline::force_assign(state, event, lid).await;
             }
         }
+        (Method::POST, ["licitaciones", id, "unassign"]) => {
+            if let Ok(lid) = id.parse::<i64>() {
+                return routes::pipeline::unassign(state, event, lid).await;
+            }
+        }
         (Method::PATCH, ["licitaciones", id, "stage"]) => {
             if let Ok(lid) = id.parse::<i64>() {
                 return routes::pipeline::update_stage(state, event, lid).await;
             }
         }
-        (Method::PATCH, ["licitaciones", id, "ingram"]) => {
+        (Method::PATCH, ["licitaciones", id, "fabricante"]) => {
             if let Ok(lid) = id.parse::<i64>() {
-                return routes::licitaciones::patch_ingram(state, event, lid).await;
+                return routes::pipeline::update_fabricante(state, event, lid).await;
+            }
+        }
+        (Method::GET, ["licitaciones", id, "stage-history"]) => {
+            if let Ok(lid) = id.parse::<i64>() {
+                return routes::pipeline::get_stage_history(state, event, lid).await;
             }
         }
         (Method::GET, ["licitaciones", id, "client-cotizaciones"]) => {

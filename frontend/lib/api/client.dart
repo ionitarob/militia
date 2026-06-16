@@ -55,20 +55,12 @@ class ApiClient {
 
   // ── Ingram workflow ──────────────────────────────────────────────────────────
 
-  Future<void> patchIngram(
-    int licitacionId, {
-    String? ingramEstado,
-    String? ingramOwner,
-    String? cotizacionSolicitadaA,
-  }) async {
-    final res = await _http.patch(
-      Uri.parse('$_base/licitaciones/$licitacionId/ingram'),
+
+  Future<void> unassignLicitacion(int licitacionId, int assigneeId) async {
+    final res = await _http.post(
+      Uri.parse('$_base/licitaciones/$licitacionId/unassign'),
       headers: await _headers(),
-      body: jsonEncode({
-        'ingram_estado': ingramEstado,
-        'ingram_owner': ingramOwner,
-        'cotizacion_solicitada_a': cotizacionSolicitadaA,
-      }),
+      body: jsonEncode({'assignee_id': assigneeId}),
     );
     _check(res);
   }
@@ -91,6 +83,11 @@ class ApiClient {
     String clienteNombre, {
     String? cotizacionXv,
     String? oportunidad,
+    String? estado,
+    String? division,
+    bool fabricanteProteccion = false,
+    String? fabricanteNombre,
+    bool? vaConPliego,
   }) async {
     final encoded = Uri.encodeComponent(clienteNombre);
     final res = await _http.put(
@@ -99,6 +96,11 @@ class ApiClient {
       body: jsonEncode({
         'cotizacion_xv': cotizacionXv,
         'oportunidad': oportunidad,
+        'estado': estado,
+        'division': division,
+        'fabricante_proteccion': fabricanteProteccion,
+        'fabricante_nombre': fabricanteNombre,
+        'va_con_pliego': vaConPliego,
       }),
     );
     _check(res);
@@ -208,11 +210,20 @@ class ApiClient {
     _check(res);
   }
 
-  Future<void> updateStage(int licitacionId, String stage) async {
+  Future<void> updateStage(
+    int licitacionId,
+    String stage, {
+    String? motivoPerdida,
+    String? motivoPerdidaTexto,
+  }) async {
     final res = await _http.patch(
       Uri.parse('$_base/licitaciones/$licitacionId/stage'),
       headers: await _headers(),
-      body: jsonEncode({'stage': stage}),
+      body: jsonEncode({
+        'stage': stage,
+        'motivo_perdida': ?motivoPerdida,
+        'motivo_perdida_texto': ?motivoPerdidaTexto,
+      }),
     );
     _check(res);
   }
@@ -457,6 +468,33 @@ class ApiClient {
     final res = await _http.post(
       Uri.parse('$_base/admin/pending-registrations/$requestId/reject'),
       headers: await _headers(),
+    );
+    _check(res);
+  }
+
+  Future<List<StageHistoryItem>> getStageHistory(int licitacionId) async {
+    final res = await _http.get(
+      Uri.parse('$_base/licitaciones/$licitacionId/stage-history'),
+      headers: await _headers(),
+    );
+    _check(res);
+    return (jsonDecode(res.body) as List)
+        .map((e) => StageHistoryItem.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> updateFabricante(
+    int licitacionId, {
+    required bool fabricanteProteccion,
+    String? fabricanteNombre,
+  }) async {
+    final res = await _http.patch(
+      Uri.parse('$_base/licitaciones/$licitacionId/fabricante'),
+      headers: await _headers(),
+      body: jsonEncode({
+        'fabricante_proteccion': fabricanteProteccion,
+        'fabricante_nombre': fabricanteNombre,
+      }),
     );
     _check(res);
   }

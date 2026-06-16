@@ -7,6 +7,14 @@ use crate::AppState;
 
 // ── Response types ────────────────────────────────────────────────────────────
 
+fn serialize_assignees<S: serde::Serializer>(v: &Option<String>, s: S) -> Result<S::Ok, S::Error> {
+    let arr = v
+        .as_deref()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(t).ok())
+        .unwrap_or(serde_json::Value::Array(vec![]));
+    arr.serialize(s)
+}
+
 #[derive(Serialize, sqlx::FromRow)]
 pub struct LicitacionSummary {
     id: i64,
@@ -32,11 +40,16 @@ pub struct LicitacionSummary {
     puntos_subjetivos: Option<i16>,
     cpv_label: Option<String>,
     created_at: DateTime<Utc>,
-    assignee_id: Option<i32>,
-    assignee_nombre: Option<String>,
+    #[sqlx(rename = "assignees_json")]
+    #[serde(rename = "assignees", serialize_with = "serialize_assignees")]
+    assignees_raw: Option<String>,
     ingram_estado: Option<String>,
     ingram_owner: Option<String>,
     cotizacion_solicitada_a: Option<String>,
+    fabricante_proteccion: bool,
+    fabricante_nombre: Option<String>,
+    motivo_perdida: Option<String>,
+    motivo_perdida_texto: Option<String>,
     organismo_nombre: Option<String>,
 }
 
@@ -53,6 +66,11 @@ struct ClientCotizacionDto {
     cliente_nombre: String,
     cotizacion_xv: Option<String>,
     oportunidad: Option<String>,
+    estado: Option<String>,
+    division: Option<String>,
+    fabricante_proteccion: bool,
+    fabricante_nombre: Option<String>,
+    va_con_pliego: Option<bool>,
 }
 
 // ── Request types ─────────────────────────────────────────────────────────────
@@ -81,16 +99,14 @@ pub struct CreateLicitacionRequest {
 }
 
 #[derive(Deserialize)]
-struct IngramPatchRequest {
-    ingram_estado: Option<String>,
-    ingram_owner: Option<String>,
-    cotizacion_solicitada_a: Option<String>,
-}
-
-#[derive(Deserialize)]
 struct ClientCotizacionRequest {
     cotizacion_xv: Option<String>,
     oportunidad: Option<String>,
+    estado: Option<String>,
+    division: Option<String>,
+    fabricante_proteccion: Option<bool>,
+    fabricante_nombre: Option<String>,
+    va_con_pliego: Option<bool>,
 }
 
 fn order_by_clause(key: &str) -> &'static str {
@@ -143,24 +159,30 @@ SELECT
     l.ingram_estado,
     l.ingram_owner,
     l.cotizacion_solicitada_a,
-    la.assignee_id,
-    u.nombre                                 AS assignee_nombre,
+    l.fabricante_proteccion,
+    l.fabricante_nombre,
+    l.motivo_perdida,
+    l.motivo_perdida_texto,
+    COALESCE(
+        (SELECT JSON_AGG(JSON_BUILD_OBJECT('id', u2.id, 'nombre', u2.nombre) ORDER BY u2.nombre)
+         FROM licitacion_assignment la2
+         JOIN app_user u2 ON u2.id = la2.assignee_id
+         WHERE la2.licitacion_id = l.id AND la2.active = TRUE),
+        '[]'::JSON
+    )::TEXT                                  AS assignees_json,
     o.nombre                                 AS organismo_nombre
 FROM licitacion l
-LEFT JOIN licitacion_assignment la
-    ON la.licitacion_id = l.id AND la.active = TRUE
-LEFT JOIN app_user u ON u.id = la.assignee_id
 LEFT JOIN area_tecnologica at ON at.id = l.area_tecnologica_id
 LEFT JOIN organismo o ON o.id = l.organismo_id
 WHERE TRUE
-  AND ($3::TEXT IS NULL OR l.comunidad_autonoma::TEXT = $3)
-  AND ($4::TEXT IS NULL OR l.mercado_vertical::TEXT = $4)
-  AND ($5::TEXT IS NULL OR l.tipo_procedimiento::TEXT = $5)
-  AND ($6::TEXT IS NULL OR l.ingram_estado = $6)
+  AND ($3::TEXT IS NULL OR l.comunidad_autonoma::TEXT = ANY(string_to_array($3, ',')))
+  AND ($4::TEXT IS NULL OR l.mercado_vertical::TEXT = ANY(string_to_array($4, ',')))
+  AND ($5::TEXT IS NULL OR l.tipo_procedimiento::TEXT = ANY(string_to_array($5, ',')))
+  AND ($6::TEXT IS NULL OR l.ingram_estado = ANY(string_to_array($6, ',')))
   AND ($7::TEXT IS NULL OR l.competencia ILIKE '%' || $7 || '%')
-  AND ($8::TEXT IS NULL OR at.cat1 = $8)
-  AND ($9::TEXT IS NULL OR at.cat2 = $9)
-  AND ($10::TEXT IS NULL OR at.cat3 = $10)
+  AND ($8::TEXT IS NULL OR at.cat1 = ANY(string_to_array($8, ',')))
+  AND ($9::TEXT IS NULL OR at.cat2 = ANY(string_to_array($9, ',')))
+  AND ($10::TEXT IS NULL OR at.cat3 = ANY(string_to_array($10, ',')))
   AND CASE $11::TEXT
     WHEN 'lt7'  THEN l.fecha_limite_oferta::DATE <= CURRENT_DATE + 7
     WHEN 'lt15' THEN l.fecha_limite_oferta::DATE <= CURRENT_DATE + 14
@@ -193,11 +215,17 @@ WHERE TRUE
        OR ($14 = 'activas' AND l.pipeline_stage NOT IN ('ganada','perdida','desierta'))
        OR ($14 != 'activas' AND l.pipeline_stage::TEXT = $14))
   AND ($15::TEXT IS NULL OR l.fecha >= CURRENT_DATE - INTERVAL '2 days')
-  AND ($16::TEXT IS NULL OR l.cotizacion_solicitada_a = $16)
+  AND ($16::TEXT IS NULL OR l.cotizacion_solicitada_a = ANY(string_to_array($16, ',')))
   AND ($17::TEXT IS NULL
-       OR ($17 = 'si'  AND la.assignee_id IS NOT NULL)
-       OR ($17 = 'no'  AND la.assignee_id IS NULL))
-  AND ($18::INTEGER IS NULL OR la.assignee_id = $18::INTEGER)
+       OR ($17 = 'si' AND EXISTS (
+             SELECT 1 FROM licitacion_assignment la
+             WHERE la.licitacion_id = l.id AND la.active = TRUE))
+       OR ($17 = 'no' AND NOT EXISTS (
+             SELECT 1 FROM licitacion_assignment la
+             WHERE la.licitacion_id = l.id AND la.active = TRUE)))
+  AND ($18::TEXT IS NULL OR EXISTS (
+        SELECT 1 FROM licitacion_assignment la
+        WHERE la.licitacion_id = l.id AND la.assignee_id = ANY(string_to_array($18, ',')::INTEGER[]) AND la.active = TRUE))
 ORDER BY {order_by}
 LIMIT $1 OFFSET $2
 "#)
@@ -208,16 +236,15 @@ const COUNT_SQL: &str = r#"
 SELECT COUNT(*)::BIGINT
 FROM licitacion l
 LEFT JOIN area_tecnologica at ON at.id = l.area_tecnologica_id
-LEFT JOIN licitacion_assignment la ON la.licitacion_id = l.id AND la.active = TRUE
 WHERE TRUE
-  AND ($1::TEXT IS NULL OR l.comunidad_autonoma::TEXT = $1)
-  AND ($2::TEXT IS NULL OR l.mercado_vertical::TEXT = $2)
-  AND ($3::TEXT IS NULL OR l.tipo_procedimiento::TEXT = $3)
-  AND ($4::TEXT IS NULL OR l.ingram_estado = $4)
+  AND ($1::TEXT IS NULL OR l.comunidad_autonoma::TEXT = ANY(string_to_array($1, ',')))
+  AND ($2::TEXT IS NULL OR l.mercado_vertical::TEXT = ANY(string_to_array($2, ',')))
+  AND ($3::TEXT IS NULL OR l.tipo_procedimiento::TEXT = ANY(string_to_array($3, ',')))
+  AND ($4::TEXT IS NULL OR l.ingram_estado = ANY(string_to_array($4, ',')))
   AND ($5::TEXT IS NULL OR l.competencia ILIKE '%' || $5 || '%')
-  AND ($6::TEXT IS NULL OR at.cat1 = $6)
-  AND ($7::TEXT IS NULL OR at.cat2 = $7)
-  AND ($8::TEXT IS NULL OR at.cat3 = $8)
+  AND ($6::TEXT IS NULL OR at.cat1 = ANY(string_to_array($6, ',')))
+  AND ($7::TEXT IS NULL OR at.cat2 = ANY(string_to_array($7, ',')))
+  AND ($8::TEXT IS NULL OR at.cat3 = ANY(string_to_array($8, ',')))
   AND CASE $9::TEXT
     WHEN 'lt7'  THEN l.fecha_limite_oferta::DATE <= CURRENT_DATE + 7
     WHEN 'lt15' THEN l.fecha_limite_oferta::DATE <= CURRENT_DATE + 14
@@ -250,11 +277,17 @@ WHERE TRUE
        OR ($12 = 'activas' AND l.pipeline_stage NOT IN ('ganada','perdida','desierta'))
        OR ($12 != 'activas' AND l.pipeline_stage::TEXT = $12))
   AND ($13::TEXT IS NULL OR l.fecha >= CURRENT_DATE - INTERVAL '2 days')
-  AND ($14::TEXT IS NULL OR l.cotizacion_solicitada_a = $14)
+  AND ($14::TEXT IS NULL OR l.cotizacion_solicitada_a = ANY(string_to_array($14, ',')))
   AND ($15::TEXT IS NULL
-       OR ($15 = 'si'  AND la.assignee_id IS NOT NULL)
-       OR ($15 = 'no'  AND la.assignee_id IS NULL))
-  AND ($16::INTEGER IS NULL OR la.assignee_id = $16::INTEGER)
+       OR ($15 = 'si' AND EXISTS (
+             SELECT 1 FROM licitacion_assignment la
+             WHERE la.licitacion_id = l.id AND la.active = TRUE))
+       OR ($15 = 'no' AND NOT EXISTS (
+             SELECT 1 FROM licitacion_assignment la
+             WHERE la.licitacion_id = l.id AND la.active = TRUE)))
+  AND ($16::TEXT IS NULL OR EXISTS (
+        SELECT 1 FROM licitacion_assignment la
+        WHERE la.licitacion_id = l.id AND la.assignee_id = ANY(string_to_array($16, ',')::INTEGER[]) AND la.active = TRUE))
 "#;
 
 // ── GET /licitaciones ─────────────────────────────────────────────────────────
@@ -284,7 +317,9 @@ pub async fn list(state: Arc<AppState>, event: Request) -> Result<Response<Body>
     let reciente            = params.first("reciente").map(|s| s.to_string());
     let division            = params.first("cotizacion_solicitada_a").map(|s| s.to_string());
     let asignada            = params.first("asignada").map(|s| s.to_string());
-    let assignee_user_id    = params.first("assignee_user_id").map(|s| s.to_string());
+    let assignee_user_ids   = params.first("assignee_user_ids")
+        .or_else(|| params.first("assignee_user_id"))
+        .map(|s| s.to_string());
     let order_by            = params.first("order_by").unwrap_or("fecha_desc");
 
     let sql = list_sql(order_by);
@@ -306,7 +341,7 @@ pub async fn list(state: Arc<AppState>, event: Request) -> Result<Response<Body>
         .bind(reciente.as_deref())
         .bind(division.as_deref())
         .bind(asignada.as_deref())
-        .bind(assignee_user_id.as_deref())
+        .bind(assignee_user_ids.as_deref())
         .fetch_all(&state.pool)
         .await
         .map_err(|e| format!("list query failed: {e}"))?;
@@ -327,7 +362,7 @@ pub async fn list(state: Arc<AppState>, event: Request) -> Result<Response<Body>
         .bind(reciente.as_deref())
         .bind(division.as_deref())
         .bind(asignada.as_deref())
-        .bind(assignee_user_id.as_deref())
+        .bind(assignee_user_ids.as_deref())
         .fetch_one(&state.pool)
         .await
         .map_err(|e| format!("count query failed: {e}"))?;
@@ -401,42 +436,6 @@ pub async fn create(state: Arc<AppState>, event: Request) -> Result<Response<Bod
     json_resp(201, serde_json::json!({"id": id}).to_string())
 }
 
-// ── PATCH /licitaciones/{id}/ingram ──────────────────────────────────────────
-
-pub async fn patch_ingram(
-    state: Arc<AppState>,
-    event: Request,
-    lid: i64,
-) -> Result<Response<Body>, Error> {
-    let raw = match event.body() {
-        Body::Text(s)   => s.as_bytes().to_vec(),
-        Body::Binary(b) => b.clone(),
-        Body::Empty     => return json_resp(400, r#"{"error":"empty body"}"#.to_string()),
-    };
-
-    let req: IngramPatchRequest = match serde_json::from_slice(&raw) {
-        Ok(r)  => r,
-        Err(e) => return json_resp(400, serde_json::json!({"error": e.to_string()}).to_string()),
-    };
-
-    sqlx::query(
-        r#"UPDATE licitacion
-           SET ingram_estado           = $2,
-               ingram_owner            = $3,
-               cotizacion_solicitada_a = $4
-           WHERE id = $1"#,
-    )
-    .bind(lid)
-    .bind(req.ingram_estado.as_deref())
-    .bind(req.ingram_owner.as_deref())
-    .bind(req.cotizacion_solicitada_a.as_deref())
-    .execute(&state.pool)
-    .await
-    .map_err(|e| format!("patch_ingram failed: {e}"))?;
-
-    json_resp(200, r#"{"ok":true}"#.to_string())
-}
-
 // ── GET /licitaciones/{id}/client-cotizaciones ───────────────────────────────
 
 pub async fn list_client_cotizaciones(
@@ -445,7 +444,8 @@ pub async fn list_client_cotizaciones(
     lid: i64,
 ) -> Result<Response<Body>, Error> {
     let rows = sqlx::query(
-        r#"SELECT cliente_nombre, cotizacion_xv, oportunidad
+        r#"SELECT cliente_nombre, cotizacion_xv, oportunidad, estado, division,
+                  fabricante_proteccion, fabricante_nombre, va_con_pliego
            FROM licitacion_cotizacion
            WHERE licitacion_id = $1
            ORDER BY cliente_nombre"#,
@@ -460,9 +460,14 @@ pub async fn list_client_cotizaciones(
         .map(|r| {
             use sqlx::Row;
             ClientCotizacionDto {
-                cliente_nombre: r.get("cliente_nombre"),
-                cotizacion_xv:  r.try_get("cotizacion_xv").ok().flatten(),
-                oportunidad:    r.try_get("oportunidad").ok().flatten(),
+                cliente_nombre:        r.get("cliente_nombre"),
+                cotizacion_xv:         r.try_get("cotizacion_xv").ok().flatten(),
+                oportunidad:           r.try_get("oportunidad").ok().flatten(),
+                estado:                r.try_get("estado").ok().flatten(),
+                division:              r.try_get("division").ok().flatten(),
+                fabricante_proteccion: r.try_get("fabricante_proteccion").ok().unwrap_or(false),
+                fabricante_nombre:     r.try_get("fabricante_nombre").ok().flatten(),
+                va_con_pliego:         r.try_get("va_con_pliego").ok().flatten(),
             }
         })
         .collect();
@@ -491,18 +496,52 @@ pub async fn upsert_client_cotizacion(
 
     sqlx::query(
         r#"INSERT INTO licitacion_cotizacion
-               (licitacion_id, cliente_nombre, cotizacion_xv, oportunidad)
-           VALUES ($1, $2, $3, $4)
+               (licitacion_id, cliente_nombre, cotizacion_xv, oportunidad,
+                estado, division, fabricante_proteccion, fabricante_nombre, va_con_pliego)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
            ON CONFLICT (licitacion_id, cliente_nombre)
-           DO UPDATE SET cotizacion_xv = $3, oportunidad = $4"#,
+           DO UPDATE SET cotizacion_xv         = $3,
+                         oportunidad           = $4,
+                         estado                = $5,
+                         division              = $6,
+                         fabricante_proteccion = $7,
+                         fabricante_nombre     = $8,
+                         va_con_pliego         = $9"#,
     )
     .bind(lid)
     .bind(&cliente)
     .bind(req.cotizacion_xv.as_deref())
     .bind(req.oportunidad.as_deref())
+    .bind(req.estado.as_deref())
+    .bind(req.division.as_deref())
+    .bind(req.fabricante_proteccion.unwrap_or(false))
+    .bind(req.fabricante_nombre.as_deref())
+    .bind(req.va_con_pliego)
     .execute(&state.pool)
     .await
     .map_err(|e| format!("upsert_client_cotizacion failed: {e}"))?;
+
+    // Auto-advance pipeline stage from client estados; never override terminal outcomes
+    sqlx::query(
+        r#"UPDATE licitacion
+           SET pipeline_stage = CASE
+             WHEN pipeline_stage::text IN ('ganada', 'perdida', 'desierta') THEN pipeline_stage
+             WHEN EXISTS (
+               SELECT 1 FROM licitacion_cotizacion
+               WHERE licitacion_id = $1 AND estado = 'COTIZACIÓN ENVIADA A CLIENTE - X4A'
+             ) THEN 'cotizaciones_enviadas'::pipeline_stage
+             WHEN EXISTS (
+               SELECT 1 FROM licitacion_cotizacion
+               WHERE licitacion_id = $1 AND estado IS NOT NULL
+             ) THEN 'en_proceso'::pipeline_stage
+             ELSE pipeline_stage
+           END
+           WHERE id = $1"#,
+    )
+    .bind(lid)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| format!("auto_stage update failed: {e}"))?;
 
     json_resp(200, r#"{"ok":true}"#.to_string())
 }
