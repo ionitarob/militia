@@ -6,6 +6,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use crate::{http_handler::ok_json_status, AppState};
+use crate::routes::pipeline::require_auth;
 
 #[derive(Serialize)]
 struct AdjuntoResponse {
@@ -88,6 +89,11 @@ pub async fn create(
     event: Request,
     licitacion_id: i64,
 ) -> Result<Response<Body>, Error> {
+    let claims = match require_auth(&event, &state.jwt_secret) {
+        Ok(c) => c,
+        Err(r) => return Ok(r),
+    };
+
     let req = parse_body::<CreateReq>(&event).map_err(|e| format!("bad request: {e}"))?;
 
     let safe_name = req
@@ -112,6 +118,9 @@ pub async fn create(
     .await
     .map_err(|e| format!("DB error: {e}"))?;
 
+    let desc = format!("Archivo adjunto subido: {}", req.nombre);
+    let _ = crate::routes::pipeline::log_change(&state.pool, licitacion_id, claims.sub, &desc).await;
+
     let presign_cfg = PresigningConfig::expires_in(Duration::from_secs(300))
         .map_err(|e| format!("presign config: {e}"))?;
 
@@ -135,10 +144,24 @@ pub async fn create(
 
 pub async fn delete(
     state: Arc<AppState>,
-    _event: Request,
+    event: Request,
     licitacion_id: i64,
     adjunto_id: i64,
 ) -> Result<Response<Body>, Error> {
+    let claims = match require_auth(&event, &state.jwt_secret) {
+        Ok(c) => c,
+        Err(r) => return Ok(r),
+    };
+
+    let file_name: Option<String> = sqlx::query_scalar(
+        "SELECT nombre FROM cotizacion_adjunto WHERE id = $1 AND licitacion_id = $2",
+    )
+    .bind(adjunto_id as i32)
+    .bind(licitacion_id as i32)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
     let s3_key: Option<String> = sqlx::query_scalar(
         "SELECT s3_key FROM cotizacion_adjunto WHERE id = $1 AND licitacion_id = $2",
     )
@@ -166,6 +189,11 @@ pub async fn delete(
         .execute(&state.pool)
         .await
         .map_err(|e| format!("DB error: {e}"))?;
+
+    if let Some(name) = file_name {
+        let desc = format!("Archivo adjunto eliminado: {}", name);
+        let _ = crate::routes::pipeline::log_change(&state.pool, licitacion_id, claims.sub, &desc).await;
+    }
 
     ok_json_status(200, r#"{"ok":true}"#)
 }

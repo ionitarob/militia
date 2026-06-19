@@ -61,6 +61,144 @@ class LicitacionFilter {
   };
 }
 
+// ── Adjudicacion ──────────────────────────────────────────────────────────────
+
+class Adjudicacion {
+  final int id;
+  final String? externalId;
+  final String titulo;
+  final String numeroExpediente;
+  final String? fechaAdjudicacion;
+  final String? fechaVencimientoContrato;
+  final double? importe;
+  final double? importeAdjudicado;
+  final double? valorEstimado;
+  final double? ratio;
+  final String? comunidadAutonoma;
+  final String? provincia;
+  final String? ambitoGeografico;
+  final String? mercadoVertical;
+  final String? tipoProcedimiento;
+  final String? tipoTramitacion;
+  final int? duracionMeses;
+  final int? prorrogasMeses;
+  final int? puntosPrecio;
+  final int? puntosMejoras;
+  final int? puntosSubjetivos;
+  final String? organismoNombre;
+  final String? adjudicatarioNombre;
+  final int? licitacionId;
+  final String? cpvLabel;
+  final String createdAt;
+
+  const Adjudicacion({
+    required this.id,
+    this.externalId,
+    required this.titulo,
+    required this.numeroExpediente,
+    this.fechaAdjudicacion,
+    this.fechaVencimientoContrato,
+    this.importe,
+    this.importeAdjudicado,
+    this.valorEstimado,
+    this.ratio,
+    this.comunidadAutonoma,
+    this.provincia,
+    this.ambitoGeografico,
+    this.mercadoVertical,
+    this.tipoProcedimiento,
+    this.tipoTramitacion,
+    this.duracionMeses,
+    this.prorrogasMeses,
+    this.puntosPrecio,
+    this.puntosMejoras,
+    this.puntosSubjetivos,
+    this.organismoNombre,
+    this.adjudicatarioNombre,
+    this.licitacionId,
+    this.cpvLabel,
+    required this.createdAt,
+  });
+
+  factory Adjudicacion.fromJson(Map<String, dynamic> j) => Adjudicacion(
+    id:                        j['id'] as int,
+    externalId:                j['external_id'] as String?,
+    titulo:                    j['titulo'] as String? ?? '',
+    numeroExpediente:          j['numero_expediente'] as String? ?? '',
+    fechaAdjudicacion:         j['fecha_adjudicacion'] as String?,
+    fechaVencimientoContrato:  j['fecha_vencimiento_contrato'] as String?,
+    importe:                   (j['importe'] as num?)?.toDouble(),
+    importeAdjudicado:         (j['importe_adjudicado'] as num?)?.toDouble(),
+    valorEstimado:             (j['valor_estimado'] as num?)?.toDouble(),
+    ratio:                     (j['ratio_adjudicacion_vs_licitacion'] as num?)?.toDouble(),
+    comunidadAutonoma:         j['comunidad_autonoma'] as String?,
+    provincia:                 j['provincia'] as String?,
+    ambitoGeografico:          j['ambito_geografico'] as String?,
+    mercadoVertical:           j['mercado_vertical'] as String?,
+    tipoProcedimiento:         j['tipo_procedimiento'] as String?,
+    tipoTramitacion:           j['tipo_tramitacion'] as String?,
+    duracionMeses:             j['duracion_meses'] as int?,
+    prorrogasMeses:            j['prorrogas_meses'] as int?,
+    puntosPrecio:              j['puntos_precio'] as int?,
+    puntosMejoras:             j['puntos_mejoras'] as int?,
+    puntosSubjetivos:          j['puntos_subjetivos'] as int?,
+    organismoNombre:           j['organismo_nombre'] as String?,
+    adjudicatarioNombre:       j['adjudicatario_nombre'] as String?,
+    licitacionId:              j['licitacion_id'] as int?,
+    cpvLabel:                  j['cpv_label'] as String?,
+    createdAt:                 j['created_at'] as String? ?? '',
+  );
+}
+
+class AdjudicacionResumen {
+  final int id;
+  final String? fechaAdjudicacion;
+  final double? importeAdjudicado;
+  final double? importe;
+  final double? ratio;
+  final String? tipoProcedimiento;
+  final String? adjudicatarioNombre;
+  final String? organismoNombre;
+
+  const AdjudicacionResumen({
+    required this.id,
+    this.fechaAdjudicacion,
+    this.importeAdjudicado,
+    this.importe,
+    this.ratio,
+    this.tipoProcedimiento,
+    this.adjudicatarioNombre,
+    this.organismoNombre,
+  });
+
+  factory AdjudicacionResumen.fromJson(Map<String, dynamic> j) => AdjudicacionResumen(
+    id:                  j['id'] as int,
+    fechaAdjudicacion:   j['fecha_adjudicacion'] as String?,
+    importeAdjudicado:   (j['importe_adjudicado'] as num?)?.toDouble(),
+    importe:             (j['importe'] as num?)?.toDouble(),
+    ratio:               (j['ratio'] as num?)?.toDouble(),
+    tipoProcedimiento:   j['tipo_procedimiento'] as String?,
+    adjudicatarioNombre: j['adjudicatario_nombre'] as String?,
+    organismoNombre:     j['organismo_nombre'] as String?,
+  );
+}
+
+class AdjudicacionPage {
+  final List<Adjudicacion> data;
+  final int total;
+  final int page;
+  final int perPage;
+
+  const AdjudicacionPage({required this.data, required this.total, required this.page, required this.perPage});
+
+  factory AdjudicacionPage.fromJson(Map<String, dynamic> j) => AdjudicacionPage(
+    data:    (j['data'] as List).map((e) => Adjudicacion.fromJson(e as Map<String, dynamic>)).toList(),
+    total:   j['total'] as int? ?? 0,
+    page:    j['page'] as int? ?? 1,
+    perPage: j['per_page'] as int? ?? 25,
+  );
+}
+
 // ── Licitacion ────────────────────────────────────────────────────────────────
 
 class LicitacionAssignee {
@@ -258,9 +396,11 @@ class ClienteCotizacion {
   final String? cotizacionXv;
   final String? oportunidad;
   final String? estado;
-  final String? division;
+  final List<String> divisiones;
   final bool fabricanteProteccion;
   final String? fabricanteNombre;
+  final bool sePresenta;
+  final int? userId;
   final bool? vaConPliego;
 
   const ClienteCotizacion({
@@ -268,9 +408,11 @@ class ClienteCotizacion {
     this.cotizacionXv,
     this.oportunidad,
     this.estado,
-    this.division,
+    this.divisiones = const [],
     this.fabricanteProteccion = false,
     this.fabricanteNombre,
+    this.sePresenta = false,
+    this.userId,
     this.vaConPliego,
   });
 
@@ -279,9 +421,12 @@ class ClienteCotizacion {
         cotizacionXv:         j['cotizacion_xv'] as String?,
         oportunidad:          j['oportunidad'] as String?,
         estado:               j['estado'] as String?,
-        division:             j['division'] as String?,
+        divisiones:           (j['divisiones'] as List<dynamic>?)
+                                  ?.map((e) => e as String).toList() ?? [],
         fabricanteProteccion: j['fabricante_proteccion'] as bool? ?? false,
         fabricanteNombre:     j['fabricante_nombre'] as String?,
+        sePresenta:           j['se_presenta'] as bool? ?? false,
+        userId:               j['user_id'] as int?,
         vaConPliego:          j['va_con_pliego'] as bool?,
       );
 
@@ -289,18 +434,22 @@ class ClienteCotizacion {
     String? cotizacionXv,
     String? oportunidad,
     String? estado,
-    String? division,
+    List<String>? divisiones,
     bool? fabricanteProteccion,
     String? fabricanteNombre,
+    bool? sePresenta,
+    int? userId,
     bool? Function()? vaConPliego,
   }) => ClienteCotizacion(
         clienteNombre:        clienteNombre,
         cotizacionXv:         cotizacionXv ?? this.cotizacionXv,
         oportunidad:          oportunidad ?? this.oportunidad,
         estado:               estado ?? this.estado,
-        division:             division ?? this.division,
+        divisiones:           divisiones ?? this.divisiones,
         fabricanteProteccion: fabricanteProteccion ?? this.fabricanteProteccion,
         fabricanteNombre:     fabricanteNombre ?? this.fabricanteNombre,
+        sePresenta:           sePresenta ?? this.sePresenta,
+        userId:               userId ?? this.userId,
         vaConPliego:          vaConPliego != null ? vaConPliego() : this.vaConPliego,
       );
 }
@@ -566,7 +715,16 @@ class DashboardBreakdown {
 }
 
 class DashboardStats {
+  final int total;
   final int activas;
+  final int activasAsignadas;
+  final int activasSinAsignar;
+  final int inactivas;
+  final int inactivasAdjudicadas;
+  final int inactivasNoAdjudicadas;
+  final int caducadas;
+  final int adjudicacionesTotal;
+  final int adjudicacionesRecientes;
   final int sinAsignar;
   final int declivesPendientes;
   final int nuevasRecientes;
@@ -575,7 +733,16 @@ class DashboardStats {
   final DashboardBreakdown breakdown;
 
   const DashboardStats({
+    required this.total,
     required this.activas,
+    required this.activasAsignadas,
+    required this.activasSinAsignar,
+    required this.inactivas,
+    required this.inactivasAdjudicadas,
+    required this.inactivasNoAdjudicadas,
+    required this.caducadas,
+    required this.adjudicacionesTotal,
+    required this.adjudicacionesRecientes,
     required this.sinAsignar,
     required this.declivesPendientes,
     required this.nuevasRecientes,
@@ -585,10 +752,19 @@ class DashboardStats {
   });
 
   factory DashboardStats.fromJson(Map<String, dynamic> j) => DashboardStats(
-        activas:            j['activas'] as int? ?? 0,
-        sinAsignar:         j['sin_asignar'] as int? ?? 0,
-        declivesPendientes: j['declives_pendientes'] as int? ?? 0,
-        nuevasRecientes:    j['nuevas_recientes'] as int? ?? 0,
+        total:                    j['total'] as int? ?? 0,
+        activas:                  j['activas'] as int? ?? 0,
+        activasAsignadas:         j['activas_asignadas'] as int? ?? 0,
+        activasSinAsignar:        j['activas_sin_asignar'] as int? ?? 0,
+        inactivas:                j['inactivas'] as int? ?? 0,
+        inactivasAdjudicadas:     j['inactivas_adjudicadas'] as int? ?? 0,
+        inactivasNoAdjudicadas:   j['inactivas_no_adjudicadas'] as int? ?? 0,
+        caducadas:                j['caducadas'] as int? ?? 0,
+        adjudicacionesTotal:      j['adjudicaciones_total'] as int? ?? 0,
+        adjudicacionesRecientes:  j['adjudicaciones_recientes'] as int? ?? 0,
+        sinAsignar:               j['sin_asignar'] as int? ?? 0,
+        declivesPendientes:       j['declives_pendientes'] as int? ?? 0,
+        nuevasRecientes:          j['nuevas_recientes'] as int? ?? 0,
         teamActivity:        (j['team_activity'] as List? ?? [])
             .map((e) => TeamActivity.fromJson(e as Map<String, dynamic>))
             .toList(),
@@ -726,5 +902,73 @@ class StageHistoryItem {
         changedAt: j['changed_at'] as String,
         userNombre: j['user_nombre'] as String?,
       );
+}
+
+// ── Chat ──────────────────────────────────────────────────────────────────────
+
+enum ChatRole { user, assistant }
+
+class ChatMessage {
+  final ChatRole role;
+  final String content;
+  final DateTime timestamp;
+
+  const ChatMessage({
+    required this.role,
+    required this.content,
+    required this.timestamp,
+  });
+}
+
+class ChatResponse {
+  final String sessionId;
+  final String reply;
+
+  const ChatResponse({required this.sessionId, required this.reply});
+
+  factory ChatResponse.fromJson(Map<String, dynamic> j) => ChatResponse(
+        sessionId: j['session_id'] as String,
+        reply:     j['reply']      as String,
+      );
+}
+
+class ChatSession {
+  final String id;
+  final String preview;
+  final String updatedAt;
+  final int messageCount;
+
+  const ChatSession({
+    required this.id,
+    required this.preview,
+    required this.updatedAt,
+    required this.messageCount,
+  });
+
+  factory ChatSession.fromJson(Map<String, dynamic> j) => ChatSession(
+        id:           j['id'] as String,
+        preview:      j['preview'] as String,
+        updatedAt:    j['updated_at'] as String,
+        messageCount: (j['message_count'] as num).toInt(),
+      );
+}
+
+class ChatSessionDetail {
+  final String id;
+  final List<ChatMessage> messages;
+
+  const ChatSessionDetail({required this.id, required this.messages});
+
+  factory ChatSessionDetail.fromJson(Map<String, dynamic> j) {
+    final msgs = (j['messages'] as List).map((m) {
+      final role = (m['role'] as String) == 'user' ? ChatRole.user : ChatRole.assistant;
+      return ChatMessage(
+        role: role,
+        content: m['content'] as String,
+        timestamp: DateTime.tryParse(m['created_at'] as String) ?? DateTime.now(),
+      );
+    }).toList();
+    return ChatSessionDetail(id: j['id'] as String, messages: msgs);
+  }
 }
 

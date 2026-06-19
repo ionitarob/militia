@@ -113,6 +113,13 @@ pub async fn create(
     .await
     .map_err(|e| format!("db: {e}"))?;
 
+    let desc = format!(
+        "Nueva cotización de distribuidor creada para {}: {}",
+        req.reseller_name,
+        status
+    );
+    let _ = crate::routes::pipeline::log_change(&state.pool, lic_id, claims.sub, &desc).await;
+
     json(201, &serde_json::json!({"id": id}).to_string())
 }
 
@@ -121,14 +128,22 @@ pub async fn create(
 pub async fn update(
     state: Arc<AppState>,
     event: Request,
-    _lic_id: i64,
+    lic_id: i64,
     quote_id: i32,
 ) -> Result<Response<Body>, Error> {
-    require_auth(&event, &state.jwt_secret)
+    let claims = require_auth(&event, &state.jwt_secret)
         .map_err(|_| "unauthorized".to_string())?;
 
     let req = parse_body::<UpdateQuoteReq>(&event)
         .map_err(|e| format!("parse: {e}"))?;
+
+    let old_info: Option<(String, String)> = sqlx::query_as(
+        "SELECT reseller_name, status::text FROM licitacion_quote WHERE id = $1"
+    )
+    .bind(quote_id)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
 
     if let Some(name) = &req.reseller_name {
         sqlx::query("UPDATE licitacion_quote SET reseller_name = $1, updated_at = NOW() WHERE id = $2")
@@ -173,6 +188,35 @@ pub async fn update(
             .map_err(|e| format!("db: {e}"))?;
     }
 
+    if let Some((reseller, old_status)) = old_info {
+        let mut changes = Vec::new();
+        if let Some(name) = &req.reseller_name {
+            if name != &reseller {
+                changes.push(format!("nombre: {} -> {}", reseller, name));
+            }
+        }
+        if let Some(s) = &req.status {
+            if s != &old_status {
+                changes.push(format!("estado: {} -> {}", old_status, s));
+            }
+        }
+        if let Some(a) = req.amount {
+            changes.push(format!("importe: {}", a));
+        }
+        if req.notes.is_some() {
+            changes.push("notas actualizadas".to_string());
+        }
+
+        if !changes.is_empty() {
+            let desc = format!(
+                "Cotización de distribuidor ({}) modificada: {}",
+                reseller,
+                changes.join(", ")
+            );
+            let _ = crate::routes::pipeline::log_change(&state.pool, lic_id, claims.sub, &desc).await;
+        }
+    }
+
     json(200, r#"{"ok":true}"#)
 }
 
@@ -181,17 +225,31 @@ pub async fn update(
 pub async fn delete(
     state: Arc<AppState>,
     event: Request,
-    _lic_id: i64,
+    lic_id: i64,
     quote_id: i32,
 ) -> Result<Response<Body>, Error> {
-    require_auth(&event, &state.jwt_secret)
+    let claims = require_auth(&event, &state.jwt_secret)
         .map_err(|_| "unauthorized".to_string())?;
+
+    let reseller_name: Option<String> = sqlx::query_scalar(
+        "SELECT reseller_name FROM licitacion_quote WHERE id = $1"
+    )
+    .bind(quote_id)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
 
     sqlx::query("DELETE FROM licitacion_quote WHERE id = $1")
         .bind(quote_id)
         .execute(&state.pool)
         .await
         .map_err(|e| format!("db: {e}"))?;
+
+    let desc = format!(
+        "Cotización de distribuidor eliminada: {}",
+        reseller_name.as_deref().unwrap_or("")
+    );
+    let _ = crate::routes::pipeline::log_change(&state.pool, lic_id, claims.sub, &desc).await;
 
     json(200, r#"{"ok":true}"#)
 }

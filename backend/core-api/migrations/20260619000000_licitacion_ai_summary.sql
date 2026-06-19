@@ -1,0 +1,3 @@
+ALTER TABLE licitacion
+  ADD COLUMN IF NOT EXISTS ai_summary    TEXT,
+  ADD COLUMN IF NOT EXISTS ai_summary_at TIMESTAMPTZ;

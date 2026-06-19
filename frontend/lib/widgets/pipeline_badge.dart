@@ -3,7 +3,7 @@ import 'package:flutter/cupertino.dart';
 const _stages = [
   'nueva', 'asignada', 'en_proceso',
   'cotizaciones_enviadas', 'presentada',
-  'ganada', 'perdida', 'desierta',
+  'ganada', 'perdida', 'rechazada', 'desierta',
 ];
 
 (Color, Color, String) _stageStyle(String stage) {
@@ -15,6 +15,7 @@ const _stages = [
     case 'presentada':             return (const Color(0xFFECFEFF), const Color(0xFF0891B2), 'Presentada');
     case 'ganada':                 return (const Color(0xFFECFDF5), const Color(0xFF059669), 'Ganada');
     case 'perdida':                return (const Color(0xFFFEF2F2), const Color(0xFFDC2626), 'Perdida');
+    case 'rechazada':              return (const Color(0xFFFFF7ED), const Color(0xFFEA580C), 'Rechazada');
     case 'desierta':               return (const Color(0xFFF9FAFB), const Color(0xFF9CA3AF), 'Desierta');
     default:                       return (const Color(0xFFF1F4F9), const Color(0xFF6B7280), stage);
   }

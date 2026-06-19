@@ -47,6 +47,15 @@ export class InfraStack extends cdk.Stack {
       subnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
     });
 
+    // Bedrock Runtime interface endpoint: core-api calls Claude from inside the isolated subnet.
+    // privateDnsEnabled ensures bedrock-runtime.region.amazonaws.com resolves to the
+    // endpoint's private IP rather than the public IP (unreachable from isolated subnets).
+    vpc.addInterfaceEndpoint('BedrockRuntimeEndpoint', {
+      service: new ec2.InterfaceVpcEndpointService(`com.amazonaws.${this.region}.bedrock-runtime`, 443),
+      privateDnsEnabled: true,
+      subnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+    });
+
     // SES interface endpoint: core-api sends OTP emails from inside the VPC.
     // Without this the isolated subnet has no route to SES's public HTTPS endpoint.
     // EMAIL covers the SES v2 API (ses.region.amazonaws.com); EMAIL_SMTP is for SMTP only.
@@ -93,16 +102,18 @@ export class InfraStack extends cdk.Stack {
     });
 
     // ── 4. Core-API Rust Lambda (in VPC) ──────────────────────────────────────
+    // Note: timeout raised to 90s so chat-with-documents calls (PDF download +
+    // Bedrock inference) have headroom. The 29s API Gateway limit is irrelevant
+    // for /chat because that endpoint is now served exclusively via Function URL.
     const coreApiLambda = new RustFunction(this, 'CoreApiLambda', {
       manifestPath: path.join(__dirname, '../../backend/core-api/Cargo.toml'),
-      // bundling.assetHash forces CDK to re-hash the full source dir (including migrations/)
-      // so adding a new .sql file triggers a Lambda rebuild and redeploy.
+      binaryName: 'bootstrap',
       bundling: {
         assetHashType: cdk.AssetHashType.SOURCE,
       },
       architecture: cdk.aws_lambda.Architecture.ARM_64,
       memorySize: 256,
-      timeout: cdk.Duration.seconds(30),
+      timeout: cdk.Duration.seconds(90),
       vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
       environment: {
@@ -119,6 +130,12 @@ export class InfraStack extends cdk.Stack {
     dbCluster.secret?.grantRead(coreApiLambda);
     jwtSecret.grantRead(coreApiLambda);
 
+    // Allow core-api to call Bedrock (Claude) for the AI assistant chat feature.
+    coreApiLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+      resources: ['*'],
+    }));
+
     // Allow core-api to send OTP emails via SES v2.
     // The identity (from-address domain) must be verified in SES before deploy.
     // Grant send permission scoped to the verified Gmail sender identity.
@@ -129,6 +146,49 @@ export class InfraStack extends cdk.Stack {
         `arn:aws:ses:${this.region}:${this.account}:identity/reporting.imes.config@gmail.com`,
       ],
     }));
+
+    // ── 4b. Chat-Stream Lambda (streaming SSE, bypasses API GW 29s limit) ────
+    // Separate binary compiled from the same Cargo workspace (binaryName: chat-stream).
+    // Served via Lambda Function URL in RESPONSE_STREAM mode — no API Gateway.
+    const chatStreamLambda = new RustFunction(this, 'ChatStreamLambda', {
+      manifestPath: path.join(__dirname, '../../backend/core-api/Cargo.toml'),
+      binaryName: 'chat-stream',
+      bundling: {
+        assetHashType: cdk.AssetHashType.SOURCE,
+      },
+      architecture: cdk.aws_lambda.Architecture.ARM_64,
+      memorySize: 512,
+      timeout: cdk.Duration.seconds(120),
+      vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      environment: {
+        DB_SECRET_ARN:  dbCluster.secret?.secretArn ?? '',
+        JWT_SECRET_ARN: jwtSecret.secretArn,
+        RUST_LOG:       'info',
+        S3_BUCKET:      `imliti-scrapes-${this.account}`,
+      },
+    });
+
+    dbCluster.connections.allowFrom(chatStreamLambda, ec2.Port.tcp(5432));
+    dbCluster.secret?.grantRead(chatStreamLambda);
+    jwtSecret.grantRead(chatStreamLambda);
+
+    chatStreamLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+      resources: ['*'],
+    }));
+
+    const chatStreamUrl = chatStreamLambda.addFunctionUrl({
+      authType: lambda.FunctionUrlAuthType.NONE,
+      invokeMode: lambda.InvokeMode.RESPONSE_STREAM,
+      cors: {
+        allowedOrigins: ['*'],
+        allowedHeaders: ['Authorization', 'Content-Type'],
+        allowedMethods: [lambda.HttpMethod.POST],
+        allowCredentials: false,
+        maxAge: cdk.Duration.hours(24),
+      },
+    });
 
     // ── 5. API Gateway ────────────────────────────────────────────────────────
     const api = new apigw.LambdaRestApi(this, 'LitiApiGateway', {
@@ -324,6 +384,8 @@ export class InfraStack extends cdk.Stack {
     scrapeBucket.grantRead(coreApiLambda, 'documents/*');
     scrapeBucket.grantReadWrite(coreApiLambda, 'cotizaciones/*');
     scrapeBucket.grantDelete(coreApiLambda, 'cotizaciones/*');
+    scrapeBucket.grantRead(chatStreamLambda, 'documents/*');
+    scrapeBucket.grantRead(chatStreamLambda, 'cotizaciones/*');
 
     // Public read for app/ prefix — allows the desktop client to download
     // the update manifest and release zips without authentication.
@@ -341,6 +403,43 @@ export class InfraStack extends cdk.Stack {
       { prefix: 'scrapes/' },
     );
 
+    // ── 10. TendersTool ingest Lambda (NO VPC — needs internet access) ──────────
+    // Calls TendersTool REST API and writes JSON to S3 (scrapes/ prefix).
+    // scraper_write picks it up via the existing S3 ObjectCreated trigger.
+    // Credentials stored in a separate secret so portal + API creds stay isolated.
+    // Secret value is managed outside CDK — set once manually:
+    //   aws secretsmanager put-secret-value --secret-id LitiTendersToolCredentials \
+    //     --secret-string '{"email":"sergi.domingo@ingrammmicro.com","password":"..."}'
+    // CDK only holds a reference so it can wire up IAM — never touches the value.
+    const tenderToolSecret = secretsmanager.Secret.fromSecretNameV2(
+      this, 'TendersToolCredentials', 'LitiTendersToolCredentials'
+    );
+
+    const ingestTendersToolLambda = new lambda.Function(this, 'IngestTendersToolLambda', {
+      runtime: lambda.Runtime.PYTHON_3_12,
+      architecture: lambda.Architecture.ARM_64,
+      handler: 'handler.lambda_handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../../backend/ingest_tenderstool'), {
+        bundling: {
+          image: lambda.Runtime.PYTHON_3_12.bundlingImage,
+          platform: 'linux/arm64',
+          command: [
+            'bash', '-c',
+            'pip install -r requirements.txt -t /asset-output && cp -au . /asset-output',
+          ],
+        },
+      }),
+      memorySize: 256,
+      timeout: cdk.Duration.minutes(10),
+      environment: {
+        TENDERSTOOL_SECRET_ARN: tenderToolSecret.secretArn,
+        S3_BUCKET: scrapeBucket.bucketName,
+      },
+    });
+
+    tenderToolSecret.grantRead(ingestTendersToolLambda);
+    scrapeBucket.grantReadWrite(ingestTendersToolLambda);
+
     // ── 10. EventBridge Scheduler ─────────────────────────────────────────────
     // Fires at 20:00 Spain time (CET = UTC+1, CEST = UTC+2 in summer).
     // Using Europe/Madrid timezone so AWS handles the DST shift automatically.
@@ -349,6 +448,7 @@ export class InfraStack extends cdk.Stack {
     });
 
     scraperFetchLambda.grantInvoke(schedulerRole);
+    ingestTendersToolLambda.grantInvoke(schedulerRole);
 
     new scheduler.CfnSchedule(this, 'DailyScrapeSchedule', {
       name: 'imliti-daily-scrape',
@@ -380,6 +480,22 @@ export class InfraStack extends cdk.Stack {
       },
     });
 
+    // TendersTool ingest runs at 06:00 Spain time — well before the portal scraper
+    // at 20:00 — so both sources land in the DB on the same day.
+    new scheduler.CfnSchedule(this, 'DailyTendersToolSchedule', {
+      name: 'imliti-daily-tenderstool',
+      description: 'Ingest new licitaciones from TendersTool API daily at 06:00 Spain time',
+      scheduleExpression: 'cron(0 6 * * ? *)',
+      scheduleExpressionTimezone: 'Europe/Madrid',
+      flexibleTimeWindow: { mode: 'OFF' },
+      target: {
+        arn: ingestTendersToolLambda.functionArn,
+        roleArn: schedulerRole.roleArn,
+        input: JSON.stringify({ source: 'scheduler', days_back: 2 }),
+        retryPolicy: { maximumRetryAttempts: 1 },
+      },
+    });
+
     // ── 11. Outputs ───────────────────────────────────────────────────────────
     new cdk.CfnOutput(this, 'ApiUrl', {
       value: api.url,
@@ -399,6 +515,16 @@ export class InfraStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'JwtSecretArn', {
       value: jwtSecret.secretArn,
       description: 'ARN of the JWT signing secret (auto-generated, stored in Secrets Manager)',
+    });
+
+    new cdk.CfnOutput(this, 'TendersToolSecretArn', {
+      value: tenderToolSecret.secretArn,
+      description: 'ARN of the TendersTool API credentials secret — set real password after deploy',
+    });
+
+    new cdk.CfnOutput(this, 'ChatStreamUrl', {
+      value: chatStreamUrl.url,
+      description: 'Lambda Function URL for streaming chat (bypasses API GW 29s timeout)',
     });
   }
 }

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::routes::pipeline::require_auth;
 
 // ── Response types ────────────────────────────────────────────────────────────
 
@@ -67,9 +68,11 @@ struct ClientCotizacionDto {
     cotizacion_xv: Option<String>,
     oportunidad: Option<String>,
     estado: Option<String>,
-    division: Option<String>,
+    divisiones: Vec<String>,
     fabricante_proteccion: bool,
     fabricante_nombre: Option<String>,
+    se_presenta: bool,
+    user_id: Option<i64>,
     va_con_pliego: Option<bool>,
 }
 
@@ -103,9 +106,11 @@ struct ClientCotizacionRequest {
     cotizacion_xv: Option<String>,
     oportunidad: Option<String>,
     estado: Option<String>,
-    division: Option<String>,
+    divisiones: Option<Vec<String>>,
     fabricante_proteccion: Option<bool>,
     fabricante_nombre: Option<String>,
+    se_presenta: Option<bool>,
+    user_id: Option<i64>,
     va_con_pliego: Option<bool>,
 }
 
@@ -184,6 +189,8 @@ WHERE TRUE
   AND ($9::TEXT IS NULL OR at.cat2 = ANY(string_to_array($9, ',')))
   AND ($10::TEXT IS NULL OR at.cat3 = ANY(string_to_array($10, ',')))
   AND CASE $11::TEXT
+    WHEN 'vigentes'  THEN (l.fecha_limite_oferta IS NULL OR l.fecha_limite_oferta::DATE >= CURRENT_DATE)
+    WHEN 'caducadas' THEN (l.fecha_limite_oferta IS NOT NULL AND l.fecha_limite_oferta::DATE < CURRENT_DATE)
     WHEN 'lt7'  THEN l.fecha_limite_oferta::DATE <= CURRENT_DATE + 7
     WHEN 'lt15' THEN l.fecha_limite_oferta::DATE <= CURRENT_DATE + 14
     WHEN 'lt30' THEN l.fecha_limite_oferta::DATE <= CURRENT_DATE + 29
@@ -246,6 +253,8 @@ WHERE TRUE
   AND ($7::TEXT IS NULL OR at.cat2 = ANY(string_to_array($7, ',')))
   AND ($8::TEXT IS NULL OR at.cat3 = ANY(string_to_array($8, ',')))
   AND CASE $9::TEXT
+    WHEN 'vigentes'  THEN (l.fecha_limite_oferta IS NULL OR l.fecha_limite_oferta::DATE >= CURRENT_DATE)
+    WHEN 'caducadas' THEN (l.fecha_limite_oferta IS NOT NULL AND l.fecha_limite_oferta::DATE < CURRENT_DATE)
     WHEN 'lt7'  THEN l.fecha_limite_oferta::DATE <= CURRENT_DATE + 7
     WHEN 'lt15' THEN l.fecha_limite_oferta::DATE <= CURRENT_DATE + 14
     WHEN 'lt30' THEN l.fecha_limite_oferta::DATE <= CURRENT_DATE + 29
@@ -436,6 +445,59 @@ pub async fn create(state: Arc<AppState>, event: Request) -> Result<Response<Bod
     json_resp(201, serde_json::json!({"id": id}).to_string())
 }
 
+// ── GET /licitaciones/{id}/adjudicacion ──────────────────────────────────────
+
+pub async fn get_adjudicacion(
+    state: Arc<AppState>,
+    event: Request,
+    lid: i64,
+) -> Result<Response<Body>, Error> {
+    match crate::routes::pipeline::require_auth(&event, &state.jwt_secret) {
+        Ok(_) => {}
+        Err(r) => return Ok(r),
+    }
+
+    let row = sqlx::query(r#"
+        SELECT
+            a.id,
+            a.fecha_adjudicacion,
+            a.importe_adjudicado::FLOAT8        AS importe_adjudicado,
+            a.importe::FLOAT8                   AS importe,
+            a.ratio_adjudicacion_vs_licitacion::FLOAT8 AS ratio,
+            a.tipo_procedimiento::TEXT          AS tipo_procedimiento,
+            adj.nombre                          AS adjudicatario_nombre,
+            o.nombre                            AS organismo_nombre
+        FROM adjudicacion a
+        LEFT JOIN adjudicatario adj ON adj.id = a.adjudicatario_id
+        LEFT JOIN organismo     o   ON o.id   = a.organismo_id
+        WHERE a.licitacion_id = $1
+        ORDER BY a.fecha_adjudicacion DESC NULLS LAST
+        LIMIT 1
+    "#)
+    .bind(lid)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| format!("get_adjudicacion: {e}"))?;
+
+    match row {
+        None => json_resp(404, r#"{"error":"not_found"}"#.to_string()),
+        Some(r) => {
+            use sqlx::Row;
+            let body = serde_json::json!({
+                "id":                    r.get::<i64, _>("id"),
+                "fecha_adjudicacion":    r.get::<Option<chrono::NaiveDate>, _>("fecha_adjudicacion").map(|d| d.to_string()),
+                "importe_adjudicado":    r.get::<Option<f64>, _>("importe_adjudicado"),
+                "importe":               r.get::<Option<f64>, _>("importe"),
+                "ratio":                 r.get::<Option<f64>, _>("ratio"),
+                "tipo_procedimiento":    r.get::<Option<String>, _>("tipo_procedimiento"),
+                "adjudicatario_nombre":  r.get::<Option<String>, _>("adjudicatario_nombre"),
+                "organismo_nombre":      r.get::<Option<String>, _>("organismo_nombre"),
+            });
+            json_resp(200, serde_json::to_string(&body)?)
+        }
+    }
+}
+
 // ── GET /licitaciones/{id}/client-cotizaciones ───────────────────────────────
 
 pub async fn list_client_cotizaciones(
@@ -444,11 +506,12 @@ pub async fn list_client_cotizaciones(
     lid: i64,
 ) -> Result<Response<Body>, Error> {
     let rows = sqlx::query(
-        r#"SELECT cliente_nombre, cotizacion_xv, oportunidad, estado, division,
-                  fabricante_proteccion, fabricante_nombre, va_con_pliego
+        r#"SELECT cliente_nombre, cotizacion_xv, oportunidad, estado,
+                  divisiones, fabricante_proteccion, fabricante_nombre,
+                  se_presenta, user_id, va_con_pliego
            FROM licitacion_cotizacion
            WHERE licitacion_id = $1
-           ORDER BY cliente_nombre"#,
+           ORDER BY cliente_nombre, user_id NULLS FIRST"#,
     )
     .bind(lid)
     .fetch_all(&state.pool)
@@ -464,9 +527,11 @@ pub async fn list_client_cotizaciones(
                 cotizacion_xv:         r.try_get("cotizacion_xv").ok().flatten(),
                 oportunidad:           r.try_get("oportunidad").ok().flatten(),
                 estado:                r.try_get("estado").ok().flatten(),
-                division:              r.try_get("division").ok().flatten(),
+                divisiones:            r.try_get::<Vec<String>, _>("divisiones").unwrap_or_default(),
                 fabricante_proteccion: r.try_get("fabricante_proteccion").ok().unwrap_or(false),
                 fabricante_nombre:     r.try_get("fabricante_nombre").ok().flatten(),
+                se_presenta:           r.try_get("se_presenta").ok().unwrap_or(false),
+                user_id:               r.try_get("user_id").ok().flatten(),
                 va_con_pliego:         r.try_get("va_con_pliego").ok().flatten(),
             }
         })
@@ -483,6 +548,11 @@ pub async fn upsert_client_cotizacion(
     lid: i64,
     cliente: String,
 ) -> Result<Response<Body>, Error> {
+    let claims = match require_auth(&event, &state.jwt_secret) {
+        Ok(c) => c,
+        Err(r) => return Ok(r),
+    };
+
     let raw = match event.body() {
         Body::Text(s)   => s.as_bytes().to_vec(),
         Body::Binary(b) => b.clone(),
@@ -494,32 +564,120 @@ pub async fn upsert_client_cotizacion(
         Err(e) => return json_resp(400, serde_json::json!({"error": e.to_string()}).to_string()),
     };
 
-    sqlx::query(
-        r#"INSERT INTO licitacion_cotizacion
-               (licitacion_id, cliente_nombre, cotizacion_xv, oportunidad,
-                estado, division, fabricante_proteccion, fabricante_nombre, va_con_pliego)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-           ON CONFLICT (licitacion_id, cliente_nombre)
-           DO UPDATE SET cotizacion_xv         = $3,
-                         oportunidad           = $4,
-                         estado                = $5,
-                         division              = $6,
-                         fabricante_proteccion = $7,
-                         fabricante_nombre     = $8,
-                         va_con_pliego         = $9"#,
+    let divisiones = req.divisiones.clone().unwrap_or_default();
+    let user_id_val = req.user_id;
+
+    let is_empty = req.cotizacion_xv.as_deref().unwrap_or("").trim().is_empty()
+        && req.oportunidad.as_deref().unwrap_or("").trim().is_empty()
+        && req.estado.as_deref().unwrap_or("").trim().is_empty()
+        && divisiones.is_empty()
+        && !req.fabricante_proteccion.unwrap_or(false)
+        && !req.se_presenta.unwrap_or(false)
+        && req.va_con_pliego.unwrap_or(false) == false;
+
+    // Fetch existing client cotizacion to compare
+    let old_info: Option<(Option<String>, Option<String>, Option<String>, Vec<String>, bool)> = sqlx::query_as(
+        "SELECT cotizacion_xv, oportunidad, estado, divisiones, se_presenta \
+         FROM licitacion_cotizacion \
+         WHERE licitacion_id = $1 AND cliente_nombre = $2 AND COALESCE(user_id, -1) = COALESCE($3, -1)"
     )
     .bind(lid)
     .bind(&cliente)
-    .bind(req.cotizacion_xv.as_deref())
-    .bind(req.oportunidad.as_deref())
-    .bind(req.estado.as_deref())
-    .bind(req.division.as_deref())
-    .bind(req.fabricante_proteccion.unwrap_or(false))
-    .bind(req.fabricante_nombre.as_deref())
-    .bind(req.va_con_pliego)
-    .execute(&state.pool)
+    .bind(user_id_val)
+    .fetch_optional(&state.pool)
     .await
-    .map_err(|e| format!("upsert_client_cotizacion failed: {e}"))?;
+    .unwrap_or(None);
+
+    if is_empty {
+        sqlx::query(
+            r#"DELETE FROM licitacion_cotizacion
+               WHERE licitacion_id = $1
+                 AND cliente_nombre = $2
+                 AND COALESCE(user_id, -1) = COALESCE($3, -1)"#,
+        )
+        .bind(lid)
+        .bind(&cliente)
+        .bind(user_id_val)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| format!("delete client_cotizacion failed: {e}"))?;
+
+        let desc = format!("Cotización de cliente eliminada: {}", cliente);
+        let _ = crate::routes::pipeline::log_change(&state.pool, lid, claims.sub, &desc).await;
+    } else {
+        sqlx::query(
+            r#"INSERT INTO licitacion_cotizacion
+                   (licitacion_id, cliente_nombre, cotizacion_xv, oportunidad,
+                    estado, divisiones, fabricante_proteccion, fabricante_nombre,
+                    se_presenta, user_id, va_con_pliego)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+               ON CONFLICT (licitacion_id, cliente_nombre, COALESCE(user_id, -1))
+               DO UPDATE SET cotizacion_xv         = $3,
+                             oportunidad           = $4,
+                             estado                = $5,
+                             divisiones            = $6,
+                             fabricante_proteccion = $7,
+                             fabricante_nombre     = $8,
+                             se_presenta           = $9,
+                             va_con_pliego         = $11"#,
+        )
+        .bind(lid)
+        .bind(&cliente)
+        .bind(req.cotizacion_xv.as_deref())
+        .bind(req.oportunidad.as_deref())
+        .bind(req.estado.as_deref())
+        .bind(&divisiones)
+        .bind(req.fabricante_proteccion.unwrap_or(false))
+        .bind(req.fabricante_nombre.as_deref())
+        .bind(req.se_presenta.unwrap_or(false))
+        .bind(user_id_val)
+        .bind(req.va_con_pliego)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| format!("upsert_client_cotizacion failed: {e}"))?;
+
+        if let Some((old_xv, old_opp, old_est, old_divs, old_pres)) = old_info {
+            let mut changes = Vec::new();
+            let new_xv = req.cotizacion_xv.as_deref().unwrap_or("");
+            let old_xv_val = old_xv.as_deref().unwrap_or("");
+            if new_xv != old_xv_val {
+                changes.push(format!("XV: {} -> {}", old_xv_val, new_xv));
+            }
+
+            let new_opp = req.oportunidad.as_deref().unwrap_or("");
+            let old_opp_val = old_opp.as_deref().unwrap_or("");
+            if new_opp != old_opp_val {
+                changes.push(format!("oportunidad: {} -> {}", old_opp_val, new_opp));
+            }
+
+            let new_est = req.estado.as_deref().unwrap_or("");
+            let old_est_val = old_est.as_deref().unwrap_or("");
+            if new_est != old_est_val {
+                changes.push(format!("estado: {} -> {}", old_est_val, new_est));
+            }
+
+            let mut sorted_new_divs = divisiones.clone();
+            sorted_new_divs.sort();
+            let mut sorted_old_divs = old_divs.clone();
+            sorted_old_divs.sort();
+            if sorted_new_divs != sorted_old_divs {
+                changes.push(format!("divisiones: {:?} -> {:?}", old_divs, divisiones));
+            }
+
+            let new_pres = req.se_presenta.unwrap_or(false);
+            if new_pres != old_pres {
+                changes.push(format!("se presenta: {} -> {}", old_pres, new_pres));
+            }
+
+            if !changes.is_empty() {
+                let desc = format!("Cotización cliente ({}) modificada: {}", cliente, changes.join(", "));
+                let _ = crate::routes::pipeline::log_change(&state.pool, lid, claims.sub, &desc).await;
+            }
+        } else {
+            let desc = format!("Nueva cotización cliente creada para: {}", cliente);
+            let _ = crate::routes::pipeline::log_change(&state.pool, lid, claims.sub, &desc).await;
+        }
+    }
 
     // Auto-advance pipeline stage from client estados; never override terminal outcomes
     sqlx::query(
@@ -542,6 +700,73 @@ pub async fn upsert_client_cotizacion(
     .execute(&state.pool)
     .await
     .map_err(|e| format!("auto_stage update failed: {e}"))?;
+
+    json_resp(200, r#"{"ok":true}"#.to_string())
+}
+
+// ── GET /licitaciones/{id}/summary ───────────────────────────────────────────
+
+pub async fn get_summary(
+    state: Arc<AppState>,
+    event: Request,
+    lid: i64,
+) -> Result<Response<Body>, Error> {
+    match require_auth(&event, &state.jwt_secret) {
+        Ok(_) => {}
+        Err(r) => return Ok(r),
+    };
+
+    let row: Option<(Option<String>, Option<DateTime<Utc>>)> = sqlx::query_as(
+        "SELECT ai_summary, ai_summary_at FROM licitacion WHERE id = $1",
+    )
+    .bind(lid)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| format!("get_summary: {e}"))?;
+
+    match row {
+        None => json_resp(404, r#"{"error":"not found"}"#.to_string()),
+        Some((summary, saved_at)) => {
+            let body = serde_json::to_string(&serde_json::json!({
+                "summary":  summary,
+                "saved_at": saved_at.map(|d| d.to_rfc3339()),
+            }))?;
+            json_resp(200, body)
+        }
+    }
+}
+
+// ── POST /licitaciones/{id}/summary ──────────────────────────────────────────
+
+pub async fn save_summary(
+    state: Arc<AppState>,
+    event: Request,
+    lid: i64,
+) -> Result<Response<Body>, Error> {
+    match require_auth(&event, &state.jwt_secret) {
+        Ok(_) => {}
+        Err(r) => return Ok(r),
+    };
+
+    #[derive(Deserialize)]
+    struct Payload { summary: String }
+
+    let body = match event.body() {
+        Body::Text(s)   => s.clone(),
+        Body::Binary(b) => String::from_utf8_lossy(b).into_owned(),
+        Body::Empty     => return json_resp(400, r#"{"error":"empty body"}"#.to_string()),
+    };
+    let payload: Payload = serde_json::from_str(&body)
+        .map_err(|e| format!("save_summary parse: {e}"))?;
+
+    sqlx::query(
+        "UPDATE licitacion SET ai_summary = $1, ai_summary_at = NOW() WHERE id = $2",
+    )
+    .bind(&payload.summary)
+    .bind(lid)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| format!("save_summary update: {e}"))?;
 
     json_resp(200, r#"{"ok":true}"#.to_string())
 }

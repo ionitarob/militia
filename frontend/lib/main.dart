@@ -2,13 +2,17 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart' show DefaultMaterialLocalizations;
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:window_manager/window_manager.dart';
-import 'screens/licitaciones_screen.dart';
-import 'screens/splash_screen.dart';
 import 'screens/admin/dashboard_screen.dart';
 import 'screens/admin/equipo_screen.dart';
 import 'screens/admin/mi_panel_admin_screen.dart';
+import 'screens/adjudicaciones_screen.dart';
+import 'screens/licitaciones_screen.dart';
+import 'screens/splash_screen.dart';
 import 'screens/vendedor/mi_panel_screen.dart';
 import 'services/auth_service.dart';
+import 'widgets/liti_chat_overlay.dart';
+
+final _navigatorKey = GlobalKey<NavigatorState>();
 
 // Minimum window dimensions — sidebar (168) + content minimum (632) × header + charts
 const _kMinSize  = Size(900, 660);
@@ -42,12 +46,37 @@ Future<void> _configureWindow() async {
   }
 }
 
-class IMLitiApp extends StatelessWidget {
+class IMLitiApp extends StatefulWidget {
   const IMLitiApp({super.key});
+
+  @override
+  State<IMLitiApp> createState() => _IMLitiAppState();
+}
+
+class _IMLitiAppState extends State<IMLitiApp> {
+  late final OverlayEntry _chatEntry;
+
+  @override
+  void initState() {
+    super.initState();
+    _chatEntry = OverlayEntry(builder: (_) => const LitiChatOverlay());
+    litiChat.addListener(_chatEntry.markNeedsBuild);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _navigatorKey.currentState?.overlay?.insert(_chatEntry);
+    });
+  }
+
+  @override
+  void dispose() {
+    litiChat.removeListener(_chatEntry.markNeedsBuild);
+    _chatEntry.remove();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return CupertinoApp(
+      navigatorKey: _navigatorKey,
       title: 'IMLiti',
       debugShowCheckedModeBanner: false,
       localizationsDelegates: const [
@@ -92,6 +121,7 @@ class _AdminShellState extends State<_AdminShell> with SingleTickerProviderState
   static const _items = [
     (CupertinoIcons.chart_bar_square_fill,      'Dashboard'),
     (CupertinoIcons.doc_text_search,            'Licitaciones'),
+    (CupertinoIcons.rosette,                    'Adjudicaciones'),
     (CupertinoIcons.person_crop_rectangle_fill, 'Mi Panel'),
     (CupertinoIcons.person_2_fill,              'Equipo'),
   ];
@@ -113,6 +143,7 @@ class _AdminShellState extends State<_AdminShell> with SingleTickerProviderState
               children: const [
                 AdminDashboardScreen(),
                 LicitacionesScreen(),
+                AdjudicacionesScreen(),
                 MiPanelAdminScreen(),
                 AdminEquipoScreen(),
               ],
@@ -143,7 +174,7 @@ class _Sidebar extends StatelessWidget {
     final bottom = MediaQuery.of(context).padding.bottom;
 
     return Container(
-      width: 168,
+      width: 192,
       decoration: const BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topCenter,
@@ -270,13 +301,17 @@ class _NavItemState extends State<_NavItem> {
               color: isActive ? _teal : _dim,
             ),
             const SizedBox(width: 10),
-            Text(
-              widget.label,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
-                color: isActive ? _teal : _dim,
-                letterSpacing: -0.1,
+            Expanded(
+              child: Text(
+                widget.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
+                  color: isActive ? _teal : _dim,
+                  letterSpacing: -0.1,
+                ),
               ),
             ),
           ]),
@@ -298,8 +333,9 @@ class _VendedorShellState extends State<_VendedorShell> {
   int _tab = 0;
 
   static const _items = [
-    (CupertinoIcons.chart_bar_square_fill, 'Dashboard'),
-    (CupertinoIcons.doc_text_search,       'Licitaciones'),
+    (CupertinoIcons.chart_bar_square_fill,      'Dashboard'),
+    (CupertinoIcons.doc_text_search,            'Licitaciones'),
+    (CupertinoIcons.rosette,                    'Adjudicaciones'),
     (CupertinoIcons.person_crop_rectangle_fill, 'Mi Panel'),
   ];
 
@@ -320,6 +356,7 @@ class _VendedorShellState extends State<_VendedorShell> {
               children: const [
                 AdminDashboardScreen(),
                 LicitacionesScreen(),
+                AdjudicacionesScreen(),
                 MiPanelScreen(),
               ],
             ),

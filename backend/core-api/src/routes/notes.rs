@@ -84,6 +84,14 @@ pub async fn create(
     .await
     .map_err(|e| format!("db: {e}"))?;
 
+    let note_preview = if req.content.trim().len() > 30 {
+        format!("{}...", &req.content.trim()[..30])
+    } else {
+        req.content.trim().to_string()
+    };
+    let desc = format!("Nota añadida: \"{}\"", note_preview);
+    let _ = crate::routes::pipeline::log_change(&state.pool, lic_id, claims.sub, &desc).await;
+
     json(201, &serde_json::json!({"id": id}).to_string())
 }
 

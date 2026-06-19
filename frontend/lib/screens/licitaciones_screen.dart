@@ -9,6 +9,7 @@ import '../api/models.dart';
 import '../data/cat_tree.dart';
 import '../widgets/pipeline_badge.dart';
 import '../widgets/skeleton_tile.dart';
+import '../widgets/liti_chat_overlay.dart';
 import 'licitacion_detail_screen.dart';
 
 const _navy = Color(0xFF0F1F3D);
@@ -278,6 +279,9 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
   List<_FO> _cat3Options = const [];
   List<AppUser> _salespeople = [];
 
+  // 'activas' | 'caducadas' | 'todas'
+  String _deadlineView = 'activas';
+
   // Sort state
   String _sortBy = 'fecha_desc'; // default: newest first
 
@@ -298,6 +302,7 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
     _loadCatOptions();
     _loadSalespeople();
     _scrollController.addListener(_onScroll);
+    litiChat.setScreenContext('Lista de licitaciones públicas activas');
   }
 
   Future<void> _loadSalespeople() async {
@@ -346,24 +351,9 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
     _fAssigneeUserIds = f.assigneeUserIds;
   }
 
-  LicitacionFilter? get _activeFilter {
-    final hasAny =
-        _fDeadlineRange != null ||
-        _fImporteRange != null ||
-        _fIngramEstado != null ||
-        _fCat1 != null ||
-        _fCat2 != null ||
-        _fCat3 != null ||
-        _fComunidad != null ||
-        _fMercado != null ||
-        _fTipoProcedimiento != null ||
-        _fDuracionRange != null ||
-        _fDivision != null ||
-        _fAsignada != null ||
-        _fAssigneeUserIds != null;
-    if (!hasAny) return null;
+  LicitacionFilter get _activeFilter {
     return LicitacionFilter(
-      deadlineRange: _fDeadlineRange,
+      deadlineRange: _fDeadlineRange ?? (_deadlineView == 'todas' ? null : _deadlineView),
       importeRange: _fImporteRange,
       ingramEstado: _fIngramEstado,
       cat1: _fCat1,
@@ -704,6 +694,47 @@ class _LicitacionesScreenState extends State<LicitacionesScreen> {
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
+                // Activas / Caducadas / Todas cycle
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _deadlineView = switch (_deadlineView) {
+                        'activas'   => 'caducadas',
+                        'caducadas' => 'todas',
+                        _           => 'activas',
+                      };
+                    });
+                    _load();
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: switch (_deadlineView) {
+                        'caducadas' => _red.withValues(alpha: 0.12),
+                        'todas'     => _navy,
+                        _           => _blue.withValues(alpha: 0.08),
+                      },
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      switch (_deadlineView) {
+                        'caducadas' => 'Caducadas',
+                        'todas'     => 'Todas',
+                        _           => 'Activas',
+                      },
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: switch (_deadlineView) {
+                          'caducadas' => _red,
+                          'todas'     => _white,
+                          _           => _blue,
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
                 // Ordenar por
                 GestureDetector(
                   onTap: _showSortSheet,

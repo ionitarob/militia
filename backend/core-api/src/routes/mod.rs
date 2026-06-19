@@ -1,4 +1,6 @@
+pub mod adjudicaciones;
 pub mod auth;
+pub mod chat;
 pub mod cotizacion_adjuntos;
 pub mod documents;
 pub mod licitaciones;

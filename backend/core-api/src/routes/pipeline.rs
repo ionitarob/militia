@@ -82,6 +82,17 @@ pub async fn assign(
         .execute(&state.pool)
         .await
         .map_err(|e| format!("db: {e}"))?;
+
+        let assignee_name: Option<String> = sqlx::query_scalar(
+            "SELECT nombre FROM app_user WHERE id = $1"
+        )
+        .bind(req.assignee_id)
+        .fetch_optional(&state.pool)
+        .await
+        .unwrap_or(None);
+
+        let desc = format!("Licitación asignada a {}", assignee_name.as_deref().unwrap_or("Usuario"));
+        let _ = log_change(&state.pool, lic_id, claims.sub, &desc).await;
     }
 
     json(200, r#"{"ok":true}"#)
@@ -132,6 +143,17 @@ pub async fn unassign(
         .map_err(|e| format!("db: {e}"))?;
     }
 
+    let assignee_name: Option<String> = sqlx::query_scalar(
+        "SELECT nombre FROM app_user WHERE id = $1"
+    )
+    .bind(req.assignee_id)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    let desc = format!("Licitación desasignada a {}", assignee_name.as_deref().unwrap_or("Usuario"));
+    let _ = log_change(&state.pool, lic_id, claims.sub, &desc).await;
+
     json(200, r#"{"ok":true}"#)
 }
 
@@ -158,6 +180,12 @@ pub async fn decline(
     .execute(&state.pool)
     .await
     .map_err(|e| format!("db: {e}"))?;
+
+    let desc = format!(
+        "Licitación declinada. Motivo: {}",
+        req.reason.as_deref().unwrap_or("no especificado")
+    );
+    let _ = log_change(&state.pool, lic_id, claims.sub, &desc).await;
 
     json(200, r#"{"ok":true}"#)
 }
@@ -216,6 +244,17 @@ pub async fn force_assign(
     .await
     .map_err(|e| format!("db: {e}"))?;
 
+    let assignee_name: Option<String> = sqlx::query_scalar(
+        "SELECT nombre FROM app_user WHERE id = $1"
+    )
+    .bind(req.assignee_id)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    let desc = format!("Asignación forzada a {}", assignee_name.as_deref().unwrap_or("Usuario"));
+    let _ = log_change(&state.pool, lic_id, claims.sub, &desc).await;
+
     json(200, r#"{"ok":true}"#)
 }
 
@@ -232,7 +271,7 @@ pub async fn update_stage(
     let valid_stages = [
         "nueva", "asignada", "en_proceso",
         "cotizaciones_enviadas", "presentada",
-        "ganada", "perdida", "desierta",
+        "ganada", "perdida", "rechazada", "desierta",
     ];
     if !valid_stages.contains(&req.stage.as_str()) {
         return json(400, r#"{"error":"stage inválido"}"#);
@@ -280,8 +319,8 @@ pub async fn update_stage(
     .await
     .map_err(|e| format!("db history: {e}"))?;
 
-    // When marked as lost, store the rejection reason
-    if req.stage == "perdida" {
+    // When marked as lost or rejected, store the reason
+    if req.stage == "perdida" || req.stage == "rechazada" {
         sqlx::query(
             "UPDATE licitacion
              SET motivo_perdida = $2, motivo_perdida_texto = $3
@@ -324,15 +363,42 @@ pub async fn dashboard_stats(
     let row = sqlx::query(
         r#"
         SELECT
+            COUNT(*)::BIGINT                               AS total,
             COUNT(*) FILTER (
-                WHERE pipeline_stage NOT IN ('ganada','perdida','desierta')
+                WHERE fecha_limite_oferta IS NOT NULL
+                  AND fecha_limite_oferta >= CURRENT_DATE
             )::BIGINT                                      AS activas,
+            COUNT(*) FILTER (
+                WHERE fecha_limite_oferta IS NOT NULL
+                  AND fecha_limite_oferta >= CURRENT_DATE
+                  AND pipeline_stage != 'nueva'
+            )::BIGINT                                      AS activas_asignadas,
+            COUNT(*) FILTER (
+                WHERE fecha_limite_oferta IS NOT NULL
+                  AND fecha_limite_oferta >= CURRENT_DATE
+                  AND pipeline_stage = 'nueva'
+            )::BIGINT                                      AS activas_sin_asignar,
+            COUNT(*) FILTER (
+                WHERE fecha_limite_oferta IS NOT NULL
+                  AND fecha_limite_oferta < CURRENT_DATE
+            )::BIGINT                                      AS inactivas,
+            COUNT(*) FILTER (
+                WHERE fecha_limite_oferta IS NOT NULL
+                  AND fecha_limite_oferta < CURRENT_DATE
+                  AND adjudicatario_nombre IS NOT NULL
+            )::BIGINT                                      AS inactivas_adjudicadas,
+            COUNT(*) FILTER (
+                WHERE fecha_limite_oferta IS NOT NULL
+                  AND fecha_limite_oferta < CURRENT_DATE
+                  AND adjudicatario_nombre IS NULL
+            )::BIGINT                                      AS inactivas_no_adjudicadas,
             COUNT(*) FILTER (
                 WHERE pipeline_stage = 'nueva'
             )::BIGINT                                      AS sin_asignar,
             COUNT(*) FILTER (
                 WHERE fecha >= CURRENT_DATE - INTERVAL '2 days'
-                  AND pipeline_stage NOT IN ('ganada','perdida','desierta')
+                  AND fecha_limite_oferta IS NOT NULL
+                  AND fecha_limite_oferta >= CURRENT_DATE
             )::BIGINT                                      AS nuevas_recientes
         FROM licitacion
         "#,
@@ -340,6 +406,22 @@ pub async fn dashboard_stats(
     .fetch_one(&state.pool)
     .await
     .map_err(|e| format!("db: {e}"))?;
+
+    let (adj_total, adj_recientes): (i64, i64) = {
+        let t = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*)::BIGINT FROM adjudicacion",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|e| format!("db adj total: {e}"))?;
+        let r = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*)::BIGINT FROM adjudicacion WHERE fecha_adjudicacion >= CURRENT_DATE - INTERVAL '2 days'",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|e| format!("db adj recientes: {e}"))?;
+        (t, r)
+    };
 
     let declines: i64 = sqlx::query_scalar(
         "SELECT COUNT(*)::BIGINT FROM licitacion_decline WHERE resolved = FALSE",
@@ -642,10 +724,19 @@ pub async fn dashboard_stats(
     .map_err(|e| format!("db duracion: {e}"))?;
 
     let stats = serde_json::json!({
-        "activas":             row.get::<i64, _>("activas"),
-        "sin_asignar":         row.get::<i64, _>("sin_asignar"),
-        "declives_pendientes": declines,
-        "nuevas_recientes":    row.get::<i64, _>("nuevas_recientes"),
+        "total":                        row.get::<i64, _>("total"),
+        "activas":                      row.get::<i64, _>("activas"),
+        "activas_asignadas":            row.get::<i64, _>("activas_asignadas"),
+        "activas_sin_asignar":          row.get::<i64, _>("activas_sin_asignar"),
+        "inactivas":                    row.get::<i64, _>("inactivas"),
+        "inactivas_adjudicadas":        row.get::<i64, _>("inactivas_adjudicadas"),
+        "inactivas_no_adjudicadas":     row.get::<i64, _>("inactivas_no_adjudicadas"),
+        "caducadas":                    row.get::<i64, _>("inactivas"),
+        "adjudicaciones_total":         adj_total,
+        "adjudicaciones_recientes":     adj_recientes,
+        "sin_asignar":                  row.get::<i64, _>("sin_asignar"),
+        "declives_pendientes":      declines,
+        "nuevas_recientes":         row.get::<i64, _>("nuevas_recientes"),
         "team_activity":       team_activity,
         "pending_declines":    declines_list,
         "breakdown": {
@@ -910,7 +1001,32 @@ pub async fn update_fabricante(
     .await
     .map_err(|e| format!("db: {e}"))?;
 
+    let desc = if req.fabricante_proteccion {
+        format!("Protección de fabricante activada ({})", req.fabricante_nombre.as_deref().unwrap_or("Sin nombre"))
+    } else {
+        "Protección de fabricante desactivada".to_string()
+    };
+    let _ = log_change(&state.pool, lic_id, claims.sub, &desc).await;
+
     json(200, r#"{"ok":true}"#)
+}
+
+pub async fn log_change(
+    pool: &sqlx::PgPool,
+    lic_id: i64,
+    user_id: i32,
+    description: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO licitacion_stage_history (licitacion_id, stage, changed_by)
+         VALUES ($1, $2, $3)",
+    )
+    .bind(lic_id)
+    .bind(description)
+    .bind(user_id as i64)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

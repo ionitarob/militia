@@ -5,6 +5,8 @@ import 'models.dart';
 
 const _base = 'https://rm0vk0iw4f.execute-api.eu-west-3.amazonaws.com/prod';
 
+const chatStreamBase = 'https://n52c2kqdmznr5vlqkgiiuufk6e0qjubr.lambda-url.eu-west-3.on.aws';
+
 class ApiClient {
   static final ApiClient _instance = ApiClient._();
   factory ApiClient() => _instance;
@@ -39,6 +41,32 @@ class ApiClient {
     final res = await _http.get(uri, headers: await _headers());
     _check(res);
     return LicitacionPage.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  Future<AdjudicacionPage> getAdjudicaciones({
+    int page = 1,
+    int perPage = 25,
+    String? recientes,
+    String? mercado,
+  }) async {
+    final uri = Uri.parse('$_base/adjudicaciones').replace(queryParameters: {
+      'page': '$page',
+      'per_page': '$perPage',
+      'recientes': ?recientes,
+      'mercado':   ?mercado,
+    });
+    final res = await _http.get(uri, headers: await _headers());
+    _check(res);
+    return AdjudicacionPage.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  Future<Adjudicacion> getAdjudicacion(int id) async {
+    final res = await _http.get(
+      Uri.parse('$_base/adjudicaciones/$id'),
+      headers: await _headers(),
+    );
+    _check(res);
+    return Adjudicacion.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
   }
 
   Future<List<Licitacion>> getMyLicitaciones() async {
@@ -84,9 +112,11 @@ class ApiClient {
     String? cotizacionXv,
     String? oportunidad,
     String? estado,
-    String? division,
+    List<String> divisiones = const [],
     bool fabricanteProteccion = false,
     String? fabricanteNombre,
+    bool sePresenta = false,
+    int? userId,
     bool? vaConPliego,
   }) async {
     final encoded = Uri.encodeComponent(clienteNombre);
@@ -97,9 +127,11 @@ class ApiClient {
         'cotizacion_xv': cotizacionXv,
         'oportunidad': oportunidad,
         'estado': estado,
-        'division': division,
+        'divisiones': divisiones,
         'fabricante_proteccion': fabricanteProteccion,
         'fabricante_nombre': fabricanteNombre,
+        'se_presenta': sePresenta,
+        'user_id': userId,
         'va_con_pliego': vaConPliego,
       }),
     );
@@ -320,7 +352,40 @@ class ApiClient {
     _check(res);
   }
 
+  // ── AI Summary ───────────────────────────────────────────────────────────────
+
+  Future<String?> getLicitacionSummary(int licitacionId) async {
+    final res = await _http.get(
+      Uri.parse('$_base/licitaciones/$licitacionId/summary'),
+      headers: await _headers(),
+    );
+    if (res.statusCode == 404) return null;
+    _check(res);
+    final j = jsonDecode(res.body) as Map<String, dynamic>;
+    return j['summary'] as String?;
+  }
+
+  Future<void> saveLicitacionSummary(int licitacionId, String summary) async {
+    final res = await _http.post(
+      Uri.parse('$_base/licitaciones/$licitacionId/summary'),
+      headers: {...await _headers(), 'content-type': 'application/json'},
+      body: jsonEncode({'summary': summary}),
+    );
+    _check(res);
+  }
+
   // ── Notes ────────────────────────────────────────────────────────────────────
+
+  Future<AdjudicacionResumen?> getAdjudicacionResumen(int licitacionId) async {
+    final res = await _http.get(
+      Uri.parse('$_base/licitaciones/$licitacionId/adjudicacion'),
+      headers: await _headers(),
+    );
+    if (res.statusCode == 404) return null;
+    _check(res);
+    return AdjudicacionResumen.fromJson(
+        jsonDecode(res.body) as Map<String, dynamic>);
+  }
 
   Future<List<LicitacionNote>> getNotes(int licitacionId) async {
     final res = await _http.get(
@@ -497,6 +562,101 @@ class ApiClient {
       }),
     );
     _check(res);
+  }
+
+  // ── Chat ─────────────────────────────────────────────────────────────────────
+
+  /// Streaming chat via Lambda Function URL (RESPONSE_STREAM).
+  /// Yields raw SSE event payloads: {"session_id":"..."}, {"token":"..."}, then [DONE].
+  /// Falls back to the buffered REST endpoint when [chatStreamBase] is not configured.
+  Stream<Map<String, dynamic>> chatStream({
+    required String message,
+    String? sessionId,
+    int? licitacionId,
+  }) async* {
+    if (chatStreamBase.isEmpty) {
+      // Fallback: call buffered endpoint and yield the full reply as a single token
+      final resp = await chat(message: message, sessionId: sessionId, licitacionId: licitacionId);
+      yield {'session_id': resp.sessionId};
+      yield {'token': resp.reply};
+      return;
+    }
+
+    final uri = Uri.parse(chatStreamBase);
+    final headers = await _headers();
+    final request = http.Request('POST', uri);
+    request.headers.addAll(headers);
+    request.body = jsonEncode({
+      'message': message,
+      if (sessionId != null) 'session_id': sessionId,
+      if (licitacionId != null) 'licitacion_id': licitacionId,
+    });
+
+    final streamed = await _http.send(request);
+    if (streamed.statusCode >= 400) {
+      throw Exception('Error ${streamed.statusCode}');
+    }
+
+    // SSE parsing: accumulate bytes → split on \n\n → extract data: lines
+    final pending = StringBuffer();
+    await for (final chunk in streamed.stream.transform(const Utf8Decoder(allowMalformed: true))) {
+      pending.write(chunk);
+      var buf = pending.toString();
+      pending.clear();
+
+      // Split on double-newline (SSE event boundary)
+      final parts = buf.split('\n\n');
+      for (var i = 0; i < parts.length - 1; i++) {
+        for (final line in parts[i].split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          final data = line.substring(6);
+          if (data == '[DONE]') return;
+          try {
+            yield jsonDecode(data) as Map<String, dynamic>;
+          } catch (_) {}
+        }
+      }
+      // Keep the incomplete trailing fragment
+      pending.write(parts.last);
+    }
+  }
+
+  Future<ChatResponse> chat({
+    required String message,
+    String? sessionId,
+    int? licitacionId,
+  }) async {
+    final res = await _http.post(
+      Uri.parse('$_base/chat'),
+      headers: await _headers(),
+      body: jsonEncode({
+        'message': message,
+        if (sessionId != null) 'session_id': sessionId,
+        if (licitacionId != null) 'licitacion_id': licitacionId,
+      }),
+    );
+    _check(res);
+    return ChatResponse.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  Future<List<ChatSession>> getChatSessions() async {
+    final res = await _http.get(
+      Uri.parse('$_base/chat/sessions'),
+      headers: await _headers(),
+    );
+    _check(res);
+    return (jsonDecode(res.body) as List)
+        .map((j) => ChatSession.fromJson(j as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<ChatSessionDetail> getChatSession(String sessionId) async {
+    final res = await _http.get(
+      Uri.parse('$_base/chat/sessions/$sessionId'),
+      headers: await _headers(),
+    );
+    _check(res);
+    return ChatSessionDetail.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
   }
 
   // ── Helper ───────────────────────────────────────────────────────────────────

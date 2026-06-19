@@ -1,5 +1,6 @@
 use lambda_http::{http::Method, Body, Error, Request, Response};
 use std::sync::Arc;
+use uuid::Uuid;
 
 use crate::{auth, routes, AppState};
 
@@ -126,7 +127,37 @@ pub async fn handle(state: Arc<AppState>, event: Request) -> Result<Response<Bod
             }
         }
 
+        // Chat sessions
+        (Method::GET, ["chat", "sessions", sid]) => {
+            if let Ok(session_id) = sid.parse::<Uuid>() {
+                return routes::chat::get_session_messages(state, event, session_id).await;
+            }
+        }
+
         // Documents
+        (Method::GET, ["adjudicaciones", id]) => {
+            if let Ok(aid) = id.parse::<i64>() {
+                return routes::adjudicaciones::get(state, event, aid).await;
+            }
+        }
+
+        (Method::GET, ["licitaciones", id, "summary"]) => {
+            if let Ok(lid) = id.parse::<i64>() {
+                return routes::licitaciones::get_summary(state, event, lid).await;
+            }
+        }
+        (Method::POST, ["licitaciones", id, "summary"]) => {
+            if let Ok(lid) = id.parse::<i64>() {
+                return routes::licitaciones::save_summary(state, event, lid).await;
+            }
+        }
+
+        (Method::GET, ["licitaciones", id, "adjudicacion"]) => {
+            if let Ok(lid) = id.parse::<i64>() {
+                return routes::licitaciones::get_adjudicacion(state, event, lid).await;
+            }
+        }
+
         (Method::GET, ["licitaciones", id, "documentos"]) => {
             if let Ok(lid) = id.parse::<i64>() {
                 return routes::documents::list(state, event, lid).await;
@@ -180,6 +211,9 @@ pub async fn handle(state: Arc<AppState>, event: Request) -> Result<Response<Bod
         (Method::GET,  "/teams")             => routes::teams::list(state, event).await,
         (Method::POST, "/teams")             => routes::teams::create(state, event).await,
         (Method::GET,  "/dashboard/stats")   => routes::pipeline::dashboard_stats(state, event).await,
+        (Method::GET,  "/adjudicaciones")    => routes::adjudicaciones::list(state, event).await,
+        (Method::POST, "/chat")              => routes::chat::send(state, event).await,
+        (Method::GET,  "/chat/sessions")     => routes::chat::list_sessions(state, event).await,
         (Method::GET,  "/licitaciones/mine") => routes::pipeline::my_licitaciones(state, event).await,
         (Method::GET,  "/team/workload")     => routes::pipeline::team_workload(state, event).await,
         (Method::GET,  "/licitaciones") => routes::licitaciones::list(state, event).await,
