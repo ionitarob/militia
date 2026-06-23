@@ -2,7 +2,8 @@ import 'dart:math' as math;
 import '../../widgets/liti_chat_overlay.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/gestures.dart' show GestureBinding, PointerScrollEvent;
-import 'package:flutter/material.dart' show PopupMenuItem, RelativeRect, Scrollbar, Tooltip, showMenu;
+import 'package:flutter/material.dart'
+    show PopupMenuItem, RelativeRect, Scrollbar, Tooltip, showMenu;
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import '../../api/client.dart';
@@ -65,7 +66,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       duration: const Duration(milliseconds: 1000),
     );
     _load();
-    litiChat.setScreenContext('Dashboard — panel de control con estadísticas de licitaciones, pipeline y adjudicaciones');
+    litiChat.setScreenContext(
+      'Dashboard — panel de control con estadísticas de licitaciones, pipeline y adjudicaciones',
+    );
   }
 
   @override
@@ -219,7 +222,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                       _IconBtn(
                         icon: CupertinoIcons.sparkles,
                         onTap: () => Navigator.of(context).push(
-                          CupertinoPageRoute(builder: (_) => const ChatScreen()),
+                          CupertinoPageRoute(
+                            builder: (_) => const ChatScreen(),
+                          ),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -254,71 +259,145 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            // Total — full-width parent
-                            _Press(
-                              onTap: () => _nav(null),
-                              child: _TotalChip(value: _stats!.total),
-                            ),
-                            const SizedBox(height: 6),
-                            // Activas + Inactivas trees side by side
-                            IntrinsicHeight(
-                              child: Row(
+                            // ── Licitaciones section card ──────────────────
+                            _SectionCard(
+                              title: 'Licitaciones',
+                              icon: CupertinoIcons.doc_text_fill,
+                              child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  Expanded(
-                                    child: _StatTree(
-                                      parentLabel: 'Activas',
-                                      parentCount: _stats!.activas,
-                                      parentAccent: _blue,
-                                      parentDark: true,
-                                      parentTooltip: 'Licitaciones aún en fecha de presentación',
-                                      onParentTap: () => _nav(const LicitacionFilter(deadlineRange: 'vigentes', label: 'Activas')),
+                                  // Row 1: Total 70% + Nuevas 48h 30%
+                                  IntrinsicHeight(
+                                    child: Row(
+                                      crossAxisAlignment: CrossAxisAlignment.stretch,
                                       children: [
-                                        _StatLeaf(
-                                          icon: CupertinoIcons.person_fill,
-                                          label: 'Asignadas',
-                                          count: _stats!.activasAsignadas,
-                                          accent: const Color(0xFF22C55E),
-                                          good: true,
-                                          tooltip: 'Un usuario del portal ya se ha asignado esta licitación para su gestión',
-                                          onTap: () => _nav(const LicitacionFilter(deadlineRange: 'vigentes', pipelineStage: 'asignada', label: 'Activas asignadas')),
+                                        Expanded(
+                                          flex: 7,
+                                          child: _Press(
+                                            onTap: () => _nav(null),
+                                            child: _TotalChip(value: _stats!.total),
+                                          ),
                                         ),
-                                        _StatLeaf(
-                                          icon: CupertinoIcons.exclamationmark_circle_fill,
-                                          label: 'Sin asignar',
-                                          count: _stats!.activasSinAsignar,
-                                          accent: _gold,
-                                          good: false,
-                                          tooltip: 'Hasta el momento, ningún usuario se ha asignado esta licitación para su gestión',
-                                          onTap: () => _nav(const LicitacionFilter(deadlineRange: 'vigentes', pipelineStage: 'nueva', label: 'Sin asignar')),
+                                        const SizedBox(width: 6),
+                                        Expanded(
+                                          flex: 3,
+                                          child: _Press(
+                                            onTap: () => _nav(
+                                              const LicitacionFilter(
+                                                reciente: '48h',
+                                                label: 'Nuevas 48h',
+                                              ),
+                                            ),
+                                            child: _NuevasChip(
+                                              value: _stats!.nuevasRecientes,
+                                            ),
+                                          ),
                                         ),
                                       ],
                                     ),
                                   ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: _StatTree(
-                                      parentLabel: 'Caducadas',
-                                      parentCount: _stats!.inactivas,
-                                      parentAccent: _red,
-                                      parentTooltip: 'Licitaciones fuera de fecha de presentación',
-                                      onParentTap: () => _nav(const LicitacionFilter(deadlineRange: 'caducadas', label: 'Caducadas')),
+                                  const SizedBox(height: 6),
+                                  // Row 2: Activas + Caducadas
+                                  IntrinsicHeight(
+                                    child: Row(
+                                      crossAxisAlignment: CrossAxisAlignment.stretch,
                                       children: [
-                                        _StatLeaf(
-                                          icon: CupertinoIcons.checkmark_seal_fill,
-                                          label: 'Adjudicadas',
-                                          count: _stats!.inactivasAdjudicadas,
-                                          accent: _teal,
-                                          good: true,
-                                          onTap: () => _nav(const LicitacionFilter(deadlineRange: 'caducadas', label: 'Caducadas adjudicadas')),
+                                        Expanded(
+                                          child: _StatTree(
+                                            parentLabel: 'Activas',
+                                            parentCount: _stats!.activas,
+                                            parentAccent: _blue,
+                                            parentDark: true,
+                                            parentTooltip:
+                                                'Licitaciones aún en fecha de presentación',
+                                            onParentTap: () => _nav(
+                                              const LicitacionFilter(
+                                                deadlineRange: 'vigentes',
+                                                label: 'Activas',
+                                              ),
+                                            ),
+                                            children: [
+                                              _StatLeaf(
+                                                icon: CupertinoIcons.person_fill,
+                                                label: 'Asignadas',
+                                                count: _stats!.activasAsignadas,
+                                                accent: const Color(0xFF22C55E),
+                                                good: true,
+                                                tooltip:
+                                                    'Un usuario del portal ya se ha asignado esta licitación para su gestión',
+                                                onTap: () => _nav(
+                                                  const LicitacionFilter(
+                                                    deadlineRange: 'vigentes',
+                                                    pipelineStage: 'asignada',
+                                                    label: 'Activas asignadas',
+                                                  ),
+                                                ),
+                                              ),
+                                              _StatLeaf(
+                                                icon: CupertinoIcons
+                                                    .exclamationmark_circle_fill,
+                                                label: 'Sin asignar',
+                                                count: _stats!.activasSinAsignar,
+                                                accent: _gold,
+                                                good: false,
+                                                tooltip:
+                                                    'Hasta el momento, ningún usuario se ha asignado esta licitación para su gestión',
+                                                onTap: () => _nav(
+                                                  const LicitacionFilter(
+                                                    deadlineRange: 'vigentes',
+                                                    pipelineStage: 'nueva',
+                                                    label: 'Sin asignar',
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
                                         ),
-                                        _StatLeaf(
-                                          icon: CupertinoIcons.xmark_circle_fill,
-                                          label: 'No adjudicadas',
-                                          count: _stats!.inactivasNoAdjudicadas,
-                                          accent: _red,
-                                          good: false,
-                                          onTap: () => _nav(const LicitacionFilter(deadlineRange: 'caducadas', label: 'No adjudicadas')),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: _StatTree(
+                                            parentLabel: 'Caducadas',
+                                            parentCount: _stats!.inactivas,
+                                            parentAccent: _red,
+                                            parentTooltip:
+                                                'Licitaciones fuera de fecha de presentación',
+                                            onParentTap: () => _nav(
+                                              const LicitacionFilter(
+                                                deadlineRange: 'caducadas',
+                                                label: 'Caducadas',
+                                              ),
+                                            ),
+                                            children: [
+                                              _StatLeaf(
+                                                icon: CupertinoIcons
+                                                    .checkmark_seal_fill,
+                                                label: 'Adjudicadas',
+                                                count: _stats!.inactivasAdjudicadas,
+                                                accent: _teal,
+                                                good: true,
+                                                onTap: () => _nav(
+                                                  const LicitacionFilter(
+                                                    deadlineRange: 'caducadas',
+                                                    label: 'Caducadas adjudicadas',
+                                                  ),
+                                                ),
+                                              ),
+                                              _StatLeaf(
+                                                icon:
+                                                    CupertinoIcons.xmark_circle_fill,
+                                                label: 'No adjudicadas',
+                                                count: _stats!.inactivasNoAdjudicadas,
+                                                accent: _red,
+                                                good: false,
+                                                onTap: () => _nav(
+                                                  const LicitacionFilter(
+                                                    deadlineRange: 'caducadas',
+                                                    label: 'No adjudicadas',
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
                                         ),
                                       ],
                                     ),
@@ -327,45 +406,63 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                               ),
                             ),
                             const SizedBox(height: 8),
-                            // Secondary KPI chips (adjudicaciones + nuevas)
-                            IntrinsicHeight(
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: _Press(
-                                      onTap: () => Navigator.of(context).push(CupertinoPageRoute(
-                                        builder: (_) => const AdjudicacionesScreen(),
-                                      )),
-                                      child: _KpiChip(value: _stats!.adjudicacionesTotal, label: 'Adjudicaciones', icon: CupertinoIcons.checkmark_seal_fill, accent: _teal),
+                            // ── Adjudicaciones section card ─────────────────
+                            _SectionCard(
+                              title: 'Adjudicaciones',
+                              icon: CupertinoIcons.checkmark_seal_fill,
+                              child: IntrinsicHeight(
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: _Press(
+                                        onTap: () => Navigator.of(context).push(
+                                          CupertinoPageRoute(
+                                            builder: (_) =>
+                                                const AdjudicacionesScreen(),
+                                          ),
+                                        ),
+                                        child: _KpiChip(
+                                          value: _stats!.adjudicacionesTotal,
+                                          label: 'Total',
+                                          icon:
+                                              CupertinoIcons.checkmark_seal_fill,
+                                          accent: _teal,
+                                        ),
+                                      ),
                                     ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: _Press(
-                                      onTap: () => Navigator.of(context).push(CupertinoPageRoute(
-                                        builder: (_) => const AdjudicacionesScreen(recientes: '2'),
-                                      )),
-                                      child: _KpiChip(value: _stats!.adjudicacionesRecientes, label: 'Adj. 48h', icon: CupertinoIcons.bolt_fill, accent: _teal),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: _Press(
+                                        onTap: () => Navigator.of(context).push(
+                                          CupertinoPageRoute(
+                                            builder: (_) =>
+                                                const AdjudicacionesScreen(
+                                                  recientes: '2',
+                                                ),
+                                          ),
+                                        ),
+                                        child: _KpiChip(
+                                          value: _stats!.adjudicacionesRecientes,
+                                          label: 'Nuevas 48h',
+                                          icon: CupertinoIcons.bolt_fill,
+                                          accent: _teal,
+                                        ),
+                                      ),
                                     ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: _Press(
-                                      onTap: () => _nav(const LicitacionFilter(reciente: '48h', label: 'Nuevas 48h')),
-                                      child: _KpiChip(value: _stats!.nuevasRecientes, label: 'Nuevas 48h', icon: CupertinoIcons.arrow_up_circle_fill, accent: _blue),
-                                    ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
                             ),
                             const SizedBox(height: 8),
                             // Team card — bottom of left column
                             _TeamCard(
                               members: _stats!.teamActivity,
-                              onTap: (m) => _nav(LicitacionFilter(
-                                assigneeUserIds: m.userId.toString(),
-                                label: m.displayName,
-                              )),
+                              onTap: (m) => _nav(
+                                LicitacionFilter(
+                                  assigneeUserIds: m.userId.toString(),
+                                  label: m.displayName,
+                                ),
+                              ),
                             ),
                           ],
                         ),
@@ -377,7 +474,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                         child: _ScheduleCard(
                           plazo: _stats!.breakdown.plazo,
                           duracion: _stats!.breakdown.duracion,
-                          onPlazoTap: (v, l) => _nav(LicitacionFilter(deadlineRange: v, label: l)),
+                          onPlazoTap: (v, l) => _nav(
+                            LicitacionFilter(deadlineRange: v, label: l),
+                          ),
                         ),
                       ),
                     ],
@@ -395,36 +494,37 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   child: SizedBox(
                     height: 320,
                     child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Expanded(
-                        flex: 7,
-                        child: _CatTabbedCard(
-                          cat1: _stats!.breakdown.cat1,
-                          cat2: _stats!.breakdown.cat2,
-                          cat3: _stats!.breakdown.cat3,
-                          onNavigate: _nav,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(
+                          flex: 7,
+                          child: _CatTabbedCard(
+                            cat1: _stats!.breakdown.cat1,
+                            cat2: _stats!.breakdown.cat2,
+                            cat3: _stats!.breakdown.cat3,
+                            onNavigate: _nav,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        flex: 3,
-                        child: _DistCard(
-                          title: 'Tipo de procedimiento',
-                          icon: CupertinoIcons.doc_plaintext,
-                          iconColor: const Color(0xFF0891B2),
-                          items: _stats!.breakdown.tipoProcedimiento,
-                          total: _stats!.activas,
-                          onTap: (v, l) => _nav(LicitacionFilter(tipoProcedimiento: v, label: l)),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          flex: 3,
+                          child: _DistCard(
+                            title: 'Tipo de procedimiento',
+                            icon: CupertinoIcons.doc_plaintext,
+                            iconColor: const Color(0xFF0891B2),
+                            items: _stats!.breakdown.tipoProcedimiento,
+                            total: _stats!.activas,
+                            onTap: (v, l) => _nav(
+                              LicitacionFilter(tipoProcedimiento: v, label: l),
+                            ),
+                          ),
                         ),
-                      ),
-                    ],
-                  ),   // Row
-                  ),   // SizedBox
-                ),     // Padding
-              ),       // FadeSlide
-            ),         // SliverToBoxAdapter
-
+                      ],
+                    ), // Row
+                  ), // SizedBox
+                ), // Padding
+              ), // FadeSlide
+            ), // SliverToBoxAdapter
             // ── Row 3: Valor · Comunidades · Mercado ─────────────────────────
             SliverToBoxAdapter(
               child: _FadeSlide(
@@ -442,7 +542,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                             icon: CupertinoIcons.money_euro_circle_fill,
                             iconColor: const Color(0xFF059669),
                             items: _stats!.breakdown.importe,
-                            onTap: (v, l) => _nav(LicitacionFilter(importeRange: v, label: l)),
+                            onTap: (v, l) => _nav(
+                              LicitacionFilter(importeRange: v, label: l),
+                            ),
                             total: _stats!.activas,
                           ),
                         ),
@@ -453,7 +555,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                             icon: CupertinoIcons.map_fill,
                             iconColor: const Color(0xFF0EA5E9),
                             items: _stats!.breakdown.comunidad,
-                            onTap: (v, l) => _nav(LicitacionFilter(comunidad: v, label: l)),
+                            onTap: (v, l) =>
+                                _nav(LicitacionFilter(comunidad: v, label: l)),
                             total: _stats!.activas,
                           ),
                         ),
@@ -464,18 +567,17 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                             icon: CupertinoIcons.building_2_fill,
                             iconColor: const Color(0xFF7C3AED),
                             items: _stats!.breakdown.mercado,
-                            onTap: (v, l) => _nav(LicitacionFilter(mercado: v, label: l)),
+                            onTap: (v, l) =>
+                                _nav(LicitacionFilter(mercado: v, label: l)),
                             total: _stats!.activas,
                           ),
                         ),
                       ],
-                    ),   // Row
-                  ),     // SizedBox
-                ),       // Padding
-              ),         // FadeSlide
-            ),           // SliverToBoxAdapter
-
-
+                    ), // Row
+                  ), // SizedBox
+                ), // Padding
+              ), // FadeSlide
+            ), // SliverToBoxAdapter
             // ── Declines ──────────────────────────────────────────────────────
             if (_stats!.pendingDeclines.isNotEmpty) ...[
               SliverToBoxAdapter(
@@ -558,11 +660,17 @@ class _PressState extends State<_Press> {
 
   @override
   Widget build(BuildContext context) => MouseRegion(
-    cursor: widget.onTap != null
-        ? SystemMouseCursors.click
-        : MouseCursor.defer,
-    onEnter: (_) => Future.microtask(() { if (mounted) setState(() => _hovered = true); }),
-    onExit: (_) => Future.microtask(() { if (mounted) setState(() { _hovered = false; _down = false; }); }),
+    cursor: widget.onTap != null ? SystemMouseCursors.click : MouseCursor.defer,
+    onEnter: (_) => Future.microtask(() {
+      if (mounted) setState(() => _hovered = true);
+    }),
+    onExit: (_) => Future.microtask(() {
+      if (mounted)
+        setState(() {
+          _hovered = false;
+          _down = false;
+        });
+    }),
     child: GestureDetector(
       onTapDown: (_) => setState(() => _down = true),
       onTapUp: (_) {
@@ -572,8 +680,18 @@ class _PressState extends State<_Press> {
       onTapCancel: () => setState(() => _down = false),
       behavior: HitTestBehavior.opaque,
       child: AnimatedScale(
-        scale: _down ? 0.97 : _hovered ? 1.015 : 1.0,
-        duration: Duration(milliseconds: _down ? 90 : _hovered ? 140 : 220),
+        scale: _down
+            ? 0.97
+            : _hovered
+            ? 1.015
+            : 1.0,
+        duration: Duration(
+          milliseconds: _down
+              ? 90
+              : _hovered
+              ? 140
+              : 220,
+        ),
         curve: _strong,
         child: widget.child,
       ),
@@ -760,9 +878,49 @@ class _ErrorState extends StatelessWidget {
   );
 }
 
-
-
 // ── Compact KPI chip (horizontal) ────────────────────────────────────────────
+
+class _SectionCard extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final Widget child;
+  const _SectionCard({required this.title, required this.icon, required this.child});
+
+  @override
+  Widget build(BuildContext context) => Container(
+    decoration: BoxDecoration(
+      color: _white,
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: _border),
+      boxShadow: [
+        BoxShadow(color: _navy.withValues(alpha: 0.05), blurRadius: 8, offset: const Offset(0, 2)),
+      ],
+    ),
+    padding: const EdgeInsets.all(12),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Icon(icon, size: 12, color: _muted),
+            const SizedBox(width: 5),
+            Text(
+              title,
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: _muted,
+                letterSpacing: 0.4,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        child,
+      ],
+    ),
+  );
+}
 
 class _KpiChip extends StatelessWidget {
   final int value;
@@ -841,6 +999,56 @@ class _KpiChip extends StatelessWidget {
 
 // ── Total pill ────────────────────────────────────────────────────────────────
 
+class _NuevasChip extends StatelessWidget {
+  final int value;
+  const _NuevasChip({required this.value});
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+    decoration: BoxDecoration(
+      color: _blue,
+      borderRadius: BorderRadius.circular(14),
+      boxShadow: [
+        BoxShadow(
+          color: _blue.withValues(alpha: 0.22),
+          blurRadius: 16,
+          offset: const Offset(0, 3),
+        ),
+      ],
+    ),
+    child: Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        TweenAnimationBuilder<double>(
+          tween: Tween(begin: 0, end: value.toDouble()),
+          duration: const Duration(milliseconds: 700),
+          curve: _strong,
+          builder: (_, v, _) => Text(
+            '${v.round()}',
+            style: const TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.w900,
+              color: _white,
+              letterSpacing: -0.8,
+              height: 1.1,
+            ),
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          'Nuevas 48h',
+          style: TextStyle(
+            fontSize: 10,
+            color: _white.withValues(alpha: 0.7),
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
 class _TotalChip extends StatelessWidget {
   final int value;
   const _TotalChip({required this.value});
@@ -852,7 +1060,11 @@ class _TotalChip extends StatelessWidget {
       color: _navy,
       borderRadius: BorderRadius.circular(14),
       boxShadow: [
-        BoxShadow(color: _navy.withValues(alpha: 0.22), blurRadius: 16, offset: const Offset(0, 3)),
+        BoxShadow(
+          color: _navy.withValues(alpha: 0.22),
+          blurRadius: 16,
+          offset: const Offset(0, 3),
+        ),
       ],
     ),
     child: Column(
@@ -879,13 +1091,21 @@ class _TotalChip extends StatelessWidget {
           children: [
             Text(
               'Total',
-              style: TextStyle(fontSize: 10, color: _white.withValues(alpha: 0.45), fontWeight: FontWeight.w600),
+              style: TextStyle(
+                fontSize: 10,
+                color: _white.withValues(alpha: 0.45),
+                fontWeight: FontWeight.w600,
+              ),
             ),
             const SizedBox(width: 4),
             Tooltip(
               message: 'Licitaciones totales en portal de Adjudicaciones TIC',
               preferBelow: true,
-              child: Icon(CupertinoIcons.info_circle, size: 11, color: _white.withValues(alpha: 0.35)),
+              child: Icon(
+                CupertinoIcons.info_circle,
+                size: 11,
+                color: _white.withValues(alpha: 0.35),
+              ),
             ),
           ],
         ),
@@ -938,8 +1158,8 @@ class _StatTree extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bg   = parentDark ? _navy : _white;
-    final fg   = parentDark ? _white : _ink;
+    final bg = parentDark ? _navy : _white;
+    final fg = parentDark ? _white : _ink;
     final fgMd = parentDark ? _white.withValues(alpha: 0.50) : _muted;
 
     return Container(
@@ -948,7 +1168,9 @@ class _StatTree extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
         boxShadow: [
           BoxShadow(
-            color: parentDark ? _navy.withValues(alpha: 0.25) : _navy.withValues(alpha: 0.06),
+            color: parentDark
+                ? _navy.withValues(alpha: 0.25)
+                : _navy.withValues(alpha: 0.06),
             blurRadius: parentDark ? 16 : 8,
             offset: const Offset(0, 3),
           ),
@@ -980,14 +1202,22 @@ class _StatTree extends StatelessWidget {
                       children: [
                         Text(
                           parentLabel,
-                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: fgMd),
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: fgMd,
+                          ),
                         ),
                         if (parentTooltip != null) ...[
                           const SizedBox(width: 4),
                           Tooltip(
                             message: parentTooltip!,
                             preferBelow: true,
-                            child: Icon(CupertinoIcons.info_circle, size: 11, color: fgMd.withValues(alpha: 0.5)),
+                            child: Icon(
+                              CupertinoIcons.info_circle,
+                              size: 11,
+                              color: fgMd.withValues(alpha: 0.5),
+                            ),
                           ),
                         ],
                       ],
@@ -1037,69 +1267,98 @@ class _StatTree extends StatelessWidget {
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: children.map((leaf) => GestureDetector(
-                        onTap: leaf.onTap,
-                        behavior: HitTestBehavior.opaque,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 4),
-                          child: Row(
-                            children: [
-                              // good/bad tinted icon badge
-                              Container(
-                                width: 22,
-                                height: 22,
-                                decoration: BoxDecoration(
-                                  color: leaf.accent.withValues(alpha: parentDark ? 0.18 : 0.10),
-                                  borderRadius: BorderRadius.circular(6),
+                      children: children
+                          .map(
+                            (leaf) => GestureDetector(
+                              onTap: leaf.onTap,
+                              behavior: HitTestBehavior.opaque,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 4,
                                 ),
-                                child: Icon(leaf.icon, size: 11, color: leaf.accent),
-                              ),
-                              const SizedBox(width: 7),
-                              Expanded(
                                 child: Row(
                                   children: [
-                                    Flexible(
-                                      child: Text(
-                                        leaf.label,
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          color: fgMd,
-                                          fontWeight: FontWeight.w500,
+                                    // good/bad tinted icon badge
+                                    Container(
+                                      width: 22,
+                                      height: 22,
+                                      decoration: BoxDecoration(
+                                        color: leaf.accent.withValues(
+                                          alpha: parentDark ? 0.18 : 0.10,
                                         ),
-                                        overflow: TextOverflow.ellipsis,
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Icon(
+                                        leaf.icon,
+                                        size: 11,
+                                        color: leaf.accent,
                                       ),
                                     ),
-                                    if (leaf.tooltip != null) ...[
-                                      const SizedBox(width: 3),
-                                      Tooltip(
-                                        message: leaf.tooltip!,
-                                        preferBelow: true,
-                                        child: Icon(CupertinoIcons.info_circle, size: 10, color: fgMd.withValues(alpha: 0.45)),
+                                    const SizedBox(width: 7),
+                                    Expanded(
+                                      child: Row(
+                                        children: [
+                                          Flexible(
+                                            child: Text(
+                                              leaf.label,
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color: fgMd,
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                          if (leaf.tooltip != null) ...[
+                                            const SizedBox(width: 3),
+                                            Tooltip(
+                                              message: leaf.tooltip!,
+                                              preferBelow: true,
+                                              child: Icon(
+                                                CupertinoIcons.info_circle,
+                                                size: 10,
+                                                color: fgMd.withValues(
+                                                  alpha: 0.45,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ],
                                       ),
-                                    ],
+                                    ),
+                                    TweenAnimationBuilder<double>(
+                                      tween: Tween(
+                                        begin: 0,
+                                        end: leaf.count.toDouble(),
+                                      ),
+                                      duration: const Duration(
+                                        milliseconds: 700,
+                                      ),
+                                      curve: _strong,
+                                      builder: (_, v, _) => Text(
+                                        '${v.round()}',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w800,
+                                          color: leaf.good
+                                              ? leaf.accent
+                                              : (parentDark
+                                                    ? fg
+                                                    : _red.withValues(
+                                                        alpha: leaf.count == 0
+                                                            ? 0.35
+                                                            : 1.0,
+                                                      )),
+                                          letterSpacing: -0.3,
+                                        ),
+                                      ),
+                                    ),
                                   ],
                                 ),
                               ),
-                              TweenAnimationBuilder<double>(
-                                tween: Tween(begin: 0, end: leaf.count.toDouble()),
-                                duration: const Duration(milliseconds: 700),
-                                curve: _strong,
-                                builder: (_, v, _) => Text(
-                                  '${v.round()}',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w800,
-                                    color: leaf.good
-                                        ? leaf.accent
-                                        : (parentDark ? fg : _red.withValues(alpha: leaf.count == 0 ? 0.35 : 1.0)),
-                                    letterSpacing: -0.3,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      )).toList(),
+                            ),
+                          )
+                          .toList(),
                     ),
                   ),
                 ],
@@ -1255,7 +1514,9 @@ class _ScheduleCardState extends State<_ScheduleCard>
   Widget build(BuildContext context) {
     final isPlazo = _tab == 0;
     final items = isPlazo ? widget.plazo : widget.duracion;
-    final max = items.fold(0, (m, i) => i.count > m ? i.count : m).clamp(1, 999999);
+    final max = items
+        .fold(0, (m, i) => i.count > m ? i.count : m)
+        .clamp(1, 999999);
     final total = items.fold(0, (s, i) => s + i.count);
     final n = items.length;
 
@@ -1270,9 +1531,17 @@ class _ScheduleCardState extends State<_ScheduleCard>
         padding: const EdgeInsets.fromLTRB(0, 10, 0, 2),
         child: Row(
           children: [
-            _SchedTab(label: 'Plazo', active: _tab == 0, onTap: () => _switchTab(0)),
+            _SchedTab(
+              label: 'Plazo',
+              active: _tab == 0,
+              onTap: () => _switchTab(0),
+            ),
             const SizedBox(width: 6),
-            _SchedTab(label: 'Duración', active: _tab == 1, onTap: () => _switchTab(1)),
+            _SchedTab(
+              label: 'Duración',
+              active: _tab == 1,
+              onTap: () => _switchTab(1),
+            ),
           ],
         ),
       ),
@@ -1281,57 +1550,64 @@ class _ScheduleCardState extends State<_ScheduleCard>
           if (event is PointerScrollEvent) {
             // Register as fallback — only wins when inner Scrollable is at its
             // extent and didn't claim the event, preventing page scroll chaining.
-            GestureBinding.instance.pointerSignalResolver.register(event, (_) {});
+            GestureBinding.instance.pointerSignalResolver.register(
+              event,
+              (_) {},
+            );
           }
         },
         child: Scrollbar(
-        controller: _scrollCtrl,
-        thumbVisibility: true,
-        radius: const Radius.circular(4),
-        thickness: 3,
-        child: SingleChildScrollView(
           controller: _scrollCtrl,
-          child: Column(
-        children: List.generate(n, (i) {
-          final item = items[i];
-          if (isPlazo) {
-            final grad = i < _plazoColors.length ? _plazoColors[i] : _plazoColors.last;
-            final start = i * 0.12;
-            final end = (start + 0.65).clamp(0.0, 1.0);
-            final barAnim = CurvedAnimation(
-              parent: _ctrl,
-              curve: Interval(start, end, curve: _strong),
-            );
-            return _GradientBarRow(
-              label: item.label,
-              count: item.count,
-              maxCount: max,
-              gradient: grad,
-              barAnim: barAnim,
-              isLast: i == n - 1,
-              onTap: item.count > 0 ? () => widget.onPlazoTap(item.value, item.label) : null,
-            );
-          } else {
-            final barAnim = CurvedAnimation(
-              parent: _ctrl,
-              curve: Interval(
-                (i * 0.08).clamp(0.0, 0.6),
-                ((i * 0.08) + 0.55).clamp(0.0, 1.0),
-                curve: _strong,
-              ),
-            );
-            return _DarkBarRow(
-              label: item.label,
-              count: item.count,
-              max: max,
-              color: _palette[i % _palette.length],
-              barAnim: barAnim,
-              isLast: i == n - 1,
-            );
-          }
-        }),
+          thumbVisibility: true,
+          radius: const Radius.circular(4),
+          thickness: 3,
+          child: SingleChildScrollView(
+            controller: _scrollCtrl,
+            child: Column(
+              children: List.generate(n, (i) {
+                final item = items[i];
+                if (isPlazo) {
+                  final grad = i < _plazoColors.length
+                      ? _plazoColors[i]
+                      : _plazoColors.last;
+                  final start = i * 0.12;
+                  final end = (start + 0.65).clamp(0.0, 1.0);
+                  final barAnim = CurvedAnimation(
+                    parent: _ctrl,
+                    curve: Interval(start, end, curve: _strong),
+                  );
+                  return _GradientBarRow(
+                    label: item.label,
+                    count: item.count,
+                    maxCount: max,
+                    gradient: grad,
+                    barAnim: barAnim,
+                    isLast: i == n - 1,
+                    onTap: item.count > 0
+                        ? () => widget.onPlazoTap(item.value, item.label)
+                        : null,
+                  );
+                } else {
+                  final barAnim = CurvedAnimation(
+                    parent: _ctrl,
+                    curve: Interval(
+                      (i * 0.08).clamp(0.0, 0.6),
+                      ((i * 0.08) + 0.55).clamp(0.0, 1.0),
+                      curve: _strong,
+                    ),
+                  );
+                  return _DarkBarRow(
+                    label: item.label,
+                    count: item.count,
+                    max: max,
+                    color: _palette[i % _palette.length],
+                    barAnim: barAnim,
+                    isLast: i == n - 1,
+                  );
+                }
+              }),
+            ),
           ),
-        ),
         ),
       ),
     );
@@ -1342,7 +1618,11 @@ class _SchedTab extends StatefulWidget {
   final String label;
   final bool active;
   final VoidCallback onTap;
-  const _SchedTab({required this.label, required this.active, required this.onTap});
+  const _SchedTab({
+    required this.label,
+    required this.active,
+    required this.onTap,
+  });
   @override
   State<_SchedTab> createState() => _SchedTabState();
 }
@@ -1364,7 +1644,9 @@ class _SchedTabState extends State<_SchedTab> {
           decoration: BoxDecoration(
             color: widget.active
                 ? _blue
-                : _hovered ? const Color(0xFFEFF6FF) : const Color(0xFFF3F4F6),
+                : _hovered
+                ? const Color(0xFFEFF6FF)
+                : const Color(0xFFF3F4F6),
             borderRadius: BorderRadius.circular(20),
           ),
           child: Text(
@@ -1415,8 +1697,20 @@ class _GradientBarRowState extends State<_GradientBarRow> {
       children: [
         MouseRegion(
           cursor: canTap ? SystemMouseCursors.click : MouseCursor.defer,
-          onEnter: canTap ? (_) => Future.microtask(() { if (mounted) setState(() => _hovered = true); }) : null,
-          onExit: canTap ? (_) => Future.microtask(() { if (mounted) setState(() { _hovered = false; _down = false; }); }) : null,
+          onEnter: canTap
+              ? (_) => Future.microtask(() {
+                  if (mounted) setState(() => _hovered = true);
+                })
+              : null,
+          onExit: canTap
+              ? (_) => Future.microtask(() {
+                  if (mounted)
+                    setState(() {
+                      _hovered = false;
+                      _down = false;
+                    });
+                })
+              : null,
           child: GestureDetector(
             onTapDown: canTap ? (_) => setState(() => _down = true) : null,
             onTapUp: canTap
@@ -1474,8 +1768,11 @@ class _GradientBarRowState extends State<_GradientBarRow> {
                                     animation: widget.barAnim,
                                     builder: (_, w) => Container(
                                       height: 24,
-                                      width: (c.maxWidth * frac * widget.barAnim.value)
-                                          .clamp(0.0, c.maxWidth),
+                                      width:
+                                          (c.maxWidth *
+                                                  frac *
+                                                  widget.barAnim.value)
+                                              .clamp(0.0, c.maxWidth),
                                       decoration: BoxDecoration(
                                         gradient: widget.gradient,
                                         borderRadius: BorderRadius.circular(6),
@@ -1535,11 +1832,17 @@ class _FunnelCard extends StatefulWidget {
   final List<BreakdownItem> stages;
   final int total;
   final void Function(String, String) onTap;
-  const _FunnelCard({required this.stages, required this.total, required this.onTap});
-  @override State<_FunnelCard> createState() => _FunnelCardState();
+  const _FunnelCard({
+    required this.stages,
+    required this.total,
+    required this.onTap,
+  });
+  @override
+  State<_FunnelCard> createState() => _FunnelCardState();
 }
 
-class _FunnelCardState extends State<_FunnelCard> with SingleTickerProviderStateMixin {
+class _FunnelCardState extends State<_FunnelCard>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
   late final Animation<double> _anim;
   int? _hoveredSlice;
@@ -1556,7 +1859,10 @@ class _FunnelCardState extends State<_FunnelCard> with SingleTickerProviderState
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100));
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1100),
+    );
     _anim = CurvedAnimation(parent: _ctrl, curve: _strong);
     Future.delayed(const Duration(milliseconds: 300), () {
       if (mounted) _ctrl.forward();
@@ -1564,7 +1870,10 @@ class _FunnelCardState extends State<_FunnelCard> with SingleTickerProviderState
   }
 
   @override
-  void dispose() { _ctrl.dispose(); super.dispose(); }
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1582,7 +1891,6 @@ class _FunnelCardState extends State<_FunnelCard> with SingleTickerProviderState
         children: [
           // ── Big segmented bar ───────────────────────────────────────
           AnimatedBuilder(
-
             animation: _anim,
             builder: (_, w) {
               return Column(
@@ -1602,20 +1910,34 @@ class _FunnelCardState extends State<_FunnelCard> with SingleTickerProviderState
                                       flex: stages[i].count,
                                       child: MouseRegion(
                                         cursor: SystemMouseCursors.click,
-                                        onEnter: (_) => setState(() => _hoveredSlice = i),
-                                        onExit: (_) => setState(() => _hoveredSlice = null),
+                                        onEnter: (_) =>
+                                            setState(() => _hoveredSlice = i),
+                                        onExit: (_) => setState(
+                                          () => _hoveredSlice = null,
+                                        ),
                                         child: GestureDetector(
-                                          onTap: () => widget.onTap(stages[i].value, stages[i].label),
+                                          onTap: () => widget.onTap(
+                                            stages[i].value,
+                                            stages[i].label,
+                                          ),
                                           child: AnimatedContainer(
-                                            duration: const Duration(milliseconds: 140),
+                                            duration: const Duration(
+                                              milliseconds: 140,
+                                            ),
                                             color: _hoveredSlice == i
-                                                ? _sliceColors[i % _sliceColors.length].withValues(alpha: 0.72)
-                                                : _sliceColors[i % _sliceColors.length],
+                                                ? _sliceColors[i %
+                                                          _sliceColors.length]
+                                                      .withValues(alpha: 0.72)
+                                                : _sliceColors[i %
+                                                      _sliceColors.length],
                                           ),
                                         ),
                                       ),
                                     ),
-                                    if (i < stages.length - 1 && stages.sublist(i + 1).any((s) => s.count > 0))
+                                    if (i < stages.length - 1 &&
+                                        stages
+                                            .sublist(i + 1)
+                                            .any((s) => s.count > 0))
                                       const SizedBox(width: 3),
                                   ],
                                 ],
@@ -1634,11 +1956,16 @@ class _FunnelCardState extends State<_FunnelCard> with SingleTickerProviderState
                           Expanded(
                             flex: stages[i].count,
                             child: GestureDetector(
-                              onTap: () => widget.onTap(stages[i].value, stages[i].label),
+                              onTap: () => widget.onTap(
+                                stages[i].value,
+                                stages[i].label,
+                              ),
                               child: MouseRegion(
                                 cursor: SystemMouseCursors.click,
-                                onEnter: (_) => setState(() => _hoveredSlice = i),
-                                onExit: (_) => setState(() => _hoveredSlice = null),
+                                onEnter: (_) =>
+                                    setState(() => _hoveredSlice = i),
+                                onExit: (_) =>
+                                    setState(() => _hoveredSlice = null),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
@@ -1648,7 +1975,8 @@ class _FunnelCardState extends State<_FunnelCard> with SingleTickerProviderState
                                         fontSize: 13,
                                         fontWeight: FontWeight.w800,
                                         color: _hoveredSlice == i
-                                            ? _sliceColors[i % _sliceColors.length]
+                                            ? _sliceColors[i %
+                                                  _sliceColors.length]
                                             : _ink,
                                         letterSpacing: -0.3,
                                       ),
@@ -1667,7 +1995,8 @@ class _FunnelCardState extends State<_FunnelCard> with SingleTickerProviderState
                               ),
                             ),
                           ),
-                          if (i < stages.length - 1 && stages.sublist(i + 1).any((s) => s.count > 0))
+                          if (i < stages.length - 1 &&
+                              stages.sublist(i + 1).any((s) => s.count > 0))
                             const SizedBox(width: 3),
                         ],
                       ],
@@ -1684,7 +2013,8 @@ class _FunnelCardState extends State<_FunnelCard> with SingleTickerProviderState
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Container(
-                              width: 6, height: 6,
+                              width: 6,
+                              height: 6,
                               decoration: BoxDecoration(
                                 color: color.withValues(alpha: 0.35),
                                 borderRadius: BorderRadius.circular(2),
@@ -1731,14 +2061,27 @@ class _TeamCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            const Icon(CupertinoIcons.person_2_fill, size: 13, color: _muted),
-            const SizedBox(width: 6),
-            const Text('Mi equipo', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _muted, letterSpacing: 0.3)),
-          ]),
+          Row(
+            children: [
+              const Icon(CupertinoIcons.person_2_fill, size: 13, color: _muted),
+              const SizedBox(width: 6),
+              const Text(
+                'Mi equipo',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: _muted,
+                  letterSpacing: 0.3,
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 12),
           if (members.isEmpty)
-            const Text('Sin miembros', style: TextStyle(fontSize: 12, color: _muted))
+            const Text(
+              'Sin miembros',
+              style: TextStyle(fontSize: 12, color: _muted),
+            )
           else
             Wrap(
               spacing: 8,
@@ -1766,42 +2109,82 @@ class _TeamSquareState extends State<_TeamSquare> {
   bool _hovered = false;
 
   static const _avatarColors = [
-    Color(0xFF2563EB), Color(0xFF7C3AED), Color(0xFF0D9488),
-    Color(0xFF059669), Color(0xFFD97706), Color(0xFF1E3A5F),
+    Color(0xFF2563EB),
+    Color(0xFF7C3AED),
+    Color(0xFF0D9488),
+    Color(0xFF059669),
+    Color(0xFFD97706),
+    Color(0xFF1E3A5F),
   ];
 
   @override
   Widget build(BuildContext context) {
     final m = widget.member;
     final name = m.displayName;
-    final initials = name.split(' ').take(2).map((w) => w.isEmpty ? '' : w[0].toUpperCase()).join();
+    final initials = name
+        .split(' ')
+        .take(2)
+        .map((w) => w.isEmpty ? '' : w[0].toUpperCase())
+        .join();
     final avatarColor = _avatarColors[m.userId % _avatarColors.length];
 
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hovered = true),
-      onExit:  (_) => setState(() => _hovered = false),
+      onExit: (_) => setState(() => _hovered = false),
       child: GestureDetector(
         onTap: widget.onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 140),
-          width: 76, height: 76,
+          width: 76,
+          height: 76,
           decoration: BoxDecoration(
             color: _hovered ? const Color(0xFFF1F5F9) : const Color(0xFFF8FAFC),
             borderRadius: BorderRadius.circular(14),
             border: Border.all(color: const Color(0xFFE2E8F0)),
           ),
-          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Container(
-              width: 34, height: 34,
-              decoration: BoxDecoration(color: avatarColor, shape: BoxShape.circle),
-              alignment: Alignment.center,
-              child: Text(initials, style: const TextStyle(color: Color(0xFFFFFFFF), fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 0.5)),
-            ),
-            const SizedBox(height: 5),
-            Text(name.split(' ').first, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: _ink), overflow: TextOverflow.ellipsis, maxLines: 1),
-            Text('${m.assignedCount}', style: const TextStyle(fontSize: 9, color: _muted, fontWeight: FontWeight.w500)),
-          ]),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: avatarColor,
+                  shape: BoxShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  initials,
+                  style: const TextStyle(
+                    color: Color(0xFFFFFFFF),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 5),
+              Text(
+                name.split(' ').first,
+                style: const TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  color: _ink,
+                ),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
+              ),
+              Text(
+                '${m.assignedCount}',
+                style: const TextStyle(
+                  fontSize: 9,
+                  color: _muted,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1871,7 +2254,10 @@ class _DistCardState extends State<_DistCard>
       child: Listener(
         onPointerSignal: (event) {
           if (event is PointerScrollEvent) {
-            GestureBinding.instance.pointerSignalResolver.register(event, (_) {});
+            GestureBinding.instance.pointerSignalResolver.register(
+              event,
+              (_) {},
+            );
           }
         },
         child: Scrollbar(
@@ -1942,8 +2328,20 @@ class _DarkBarRowState extends State<_DarkBarRow> {
       children: [
         MouseRegion(
           cursor: canTap ? SystemMouseCursors.click : MouseCursor.defer,
-          onEnter: canTap ? (_) => Future.microtask(() { if (mounted) setState(() => _hovered = true); }) : null,
-          onExit: canTap ? (_) => Future.microtask(() { if (mounted) setState(() { _hovered = false; _down = false; }); }) : null,
+          onEnter: canTap
+              ? (_) => Future.microtask(() {
+                  if (mounted) setState(() => _hovered = true);
+                })
+              : null,
+          onExit: canTap
+              ? (_) => Future.microtask(() {
+                  if (mounted)
+                    setState(() {
+                      _hovered = false;
+                      _down = false;
+                    });
+                })
+              : null,
           child: GestureDetector(
             onTapDown: canTap ? (_) => setState(() => _down = true) : null,
             onTapUp: canTap
@@ -2002,10 +2400,13 @@ class _DarkBarRowState extends State<_DarkBarRow> {
                                 animation: widget.barAnim,
                                 builder: (_, w) => Container(
                                   height: 8,
-                                  width: (c.maxWidth * frac * widget.barAnim.value)
-                                      .clamp(0.0, c.maxWidth),
+                                  width:
+                                      (c.maxWidth * frac * widget.barAnim.value)
+                                          .clamp(0.0, c.maxWidth),
                                   decoration: BoxDecoration(
-                                    color: widget.count == 0 ? _border : widget.color,
+                                    color: widget.count == 0
+                                        ? _border
+                                        : widget.color,
                                     borderRadius: BorderRadius.circular(4),
                                   ),
                                 ),
@@ -2066,19 +2467,30 @@ const _catTree = catTree;
 bool _matchLabel(String label, String key) =>
     label.toLowerCase().trim() == key.toLowerCase().trim();
 
-List<BreakdownItem> _filterCat2ForCat1(List<BreakdownItem> cat2, String cat1Label) {
+List<BreakdownItem> _filterCat2ForCat1(
+  List<BreakdownItem> cat2,
+  String cat1Label,
+) {
   final key = cat1Label.toLowerCase();
   final allowed = _catTree[key]?.keys.toSet() ?? {};
   if (allowed.isEmpty) return cat2;
-  return cat2.where((i) => allowed.any((k) => _matchLabel(i.label, k))).toList();
+  return cat2
+      .where((i) => allowed.any((k) => _matchLabel(i.label, k)))
+      .toList();
 }
 
-List<BreakdownItem> _filterCat3ForCat2(List<BreakdownItem> cat3, String cat1Label, String cat2Label) {
+List<BreakdownItem> _filterCat3ForCat2(
+  List<BreakdownItem> cat3,
+  String cat1Label,
+  String cat2Label,
+) {
   final cat1Key = cat1Label.toLowerCase();
   final cat2Key = cat2Label.toLowerCase();
   final allowed = _catTree[cat1Key]?[cat2Key]?.toSet() ?? {};
   if (allowed.isEmpty) return cat3;
-  return cat3.where((i) => allowed.any((k) => _matchLabel(i.label, k))).toList();
+  return cat3
+      .where((i) => allowed.any((k) => _matchLabel(i.label, k)))
+      .toList();
 }
 
 // ── Unified CAT drill-down card ───────────────────────────────────────────────
@@ -2136,12 +2548,14 @@ class _CatTabbedCardState extends State<_CatTabbedCard>
 
   // Navigate to licitaciones for a specific item at current level
   void _navigateItem(String label) {
-    widget.onNavigate(LicitacionFilter(
-      cat1: _level == 0 ? label : _selectedCat1,
-      cat2: _level == 1 ? label : (_level == 2 ? _selectedCat2 : null),
-      cat3: _level == 2 ? label : null,
-      label: label,
-    ));
+    widget.onNavigate(
+      LicitacionFilter(
+        cat1: _level == 0 ? label : _selectedCat1,
+        cat2: _level == 1 ? label : (_level == 2 ? _selectedCat2 : null),
+        cat3: _level == 2 ? label : null,
+        label: label,
+      ),
+    );
   }
 
   void _drillDown(String label) {
@@ -2183,7 +2597,9 @@ class _CatTabbedCardState extends State<_CatTabbedCard>
   @override
   Widget build(BuildContext context) {
     final items = _currentItems;
-    final max = items.fold(0, (m, i) => i.count > m ? i.count : m).clamp(1, 999999);
+    final max = items
+        .fold(0, (m, i) => i.count > m ? i.count : m)
+        .clamp(1, 999999);
     final total = widget.cat1.fold(0, (s, i) => s + i.count);
 
     return Container(
@@ -2192,7 +2608,11 @@ class _CatTabbedCardState extends State<_CatTabbedCard>
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: _border),
         boxShadow: const [
-          BoxShadow(color: Color(0x08000000), blurRadius: 8, offset: Offset(0, 2)),
+          BoxShadow(
+            color: Color(0x08000000),
+            blurRadius: 8,
+            offset: Offset(0, 2),
+          ),
         ],
       ),
       child: Column(
@@ -2209,8 +2629,11 @@ class _CatTabbedCardState extends State<_CatTabbedCard>
                     color: const Color(0xFFFEF3C7),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: const Icon(CupertinoIcons.tag_fill,
-                      size: 15, color: Color(0xFFD97706)),
+                  child: const Icon(
+                    CupertinoIcons.tag_fill,
+                    size: 15,
+                    color: Color(0xFFD97706),
+                  ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
@@ -2222,8 +2645,10 @@ class _CatTabbedCardState extends State<_CatTabbedCard>
                   ),
                 ),
                 if (total > 0)
-                  Text('Total: $total',
-                      style: const TextStyle(fontSize: 11.5, color: _muted)),
+                  Text(
+                    'Total: $total',
+                    style: const TextStyle(fontSize: 11.5, color: _muted),
+                  ),
               ],
             ),
           ),
@@ -2234,7 +2659,10 @@ class _CatTabbedCardState extends State<_CatTabbedCard>
             child: Listener(
               onPointerSignal: (event) {
                 if (event is PointerScrollEvent) {
-                  GestureBinding.instance.pointerSignalResolver.register(event, (_) {});
+                  GestureBinding.instance.pointerSignalResolver.register(
+                    event,
+                    (_) {},
+                  );
                 }
               },
               child: Scrollbar(
@@ -2257,7 +2685,9 @@ class _CatTabbedCardState extends State<_CatTabbedCard>
                           color: _palette[i % _palette.length],
                           barAnim: _barAnim,
                           isLast: i == items.length - 1,
-                          onTap: drillable ? () => _drillDown(item.label) : () => _navigateItem(item.label),
+                          onTap: drillable
+                              ? () => _drillDown(item.label)
+                              : () => _navigateItem(item.label),
                           trailing: const _VerCategoriaChip(),
                           onTrailingTap: () => _navigateItem(item.label),
                         );
@@ -2288,9 +2718,14 @@ class _VerCategoriaChip extends StatelessWidget {
       child: const Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text('Ver categoría',
-              style: TextStyle(
-                  fontSize: 10.5, fontWeight: FontWeight.w500, color: _blue)),
+          Text(
+            'Ver categoría',
+            style: TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w500,
+              color: _blue,
+            ),
+          ),
           SizedBox(width: 2),
           Icon(CupertinoIcons.arrow_right, size: 9, color: _blue),
         ],
@@ -2319,7 +2754,11 @@ class _Breadcrumb extends StatelessWidget {
           if (i > 0)
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 4),
-              child: Icon(CupertinoIcons.chevron_right, size: 10, color: _muted),
+              child: Icon(
+                CupertinoIcons.chevron_right,
+                size: 10,
+                color: _muted,
+              ),
             ),
           if (i < crumbs.length - 1 && onBack != null)
             GestureDetector(
@@ -2346,7 +2785,9 @@ class _Breadcrumb extends StatelessWidget {
               crumbs[i],
               style: TextStyle(
                 fontSize: 13.5,
-                fontWeight: i == crumbs.length - 1 ? FontWeight.w600 : FontWeight.w400,
+                fontWeight: i == crumbs.length - 1
+                    ? FontWeight.w600
+                    : FontWeight.w400,
                 color: i == crumbs.length - 1 ? _ink : _muted,
                 letterSpacing: -0.1,
               ),
@@ -2397,7 +2838,12 @@ class _ChartCard extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Padding(
-          padding: EdgeInsets.fromLTRB(14, 14, 14, headerBottom != null ? 0 : 10),
+          padding: EdgeInsets.fromLTRB(
+            14,
+            14,
+            14,
+            headerBottom != null ? 0 : 10,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -2525,181 +2971,197 @@ class _MemberCardState extends State<_MemberCard>
 
     return MouseRegion(
       cursor: SystemMouseCursors.click,
-      onEnter: (_) => Future.microtask(() { if (mounted) setState(() => _hovered = true); }),
-      onExit: (_) => Future.microtask(() { if (mounted) setState(() { _hovered = false; _down = false; }); }),
+      onEnter: (_) => Future.microtask(() {
+        if (mounted) setState(() => _hovered = true);
+      }),
+      onExit: (_) => Future.microtask(() {
+        if (mounted)
+          setState(() {
+            _hovered = false;
+            _down = false;
+          });
+      }),
       child: GestureDetector(
-      onTapDown: (_) => setState(() => _down = true),
-      onTapUp: (_) {
-        setState(() => _down = false);
-        widget.onTap();
-      },
-      onTapCancel: () => setState(() => _down = false),
-      behavior: HitTestBehavior.opaque,
-      child: AnimatedScale(
-        scale: _down ? 0.97 : _hovered ? 1.015 : 1.0,
-        duration: Duration(milliseconds: _down ? 90 : _hovered ? 140 : 220),
-        curve: _strong,
-        child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: _white,
-            borderRadius: BorderRadius.circular(16),
-            border: isTop
-                ? Border.all(color: _blue.withValues(alpha: 0.20))
-                : null,
-            boxShadow: [
-              BoxShadow(
-                color: isTop
-                    ? _blue.withValues(alpha: 0.08)
-                    : _navy.withValues(alpha: 0.05),
-                blurRadius: isTop ? 16 : 10,
-                offset: const Offset(0, 3),
-              ),
-            ],
+        onTapDown: (_) => setState(() => _down = true),
+        onTapUp: (_) {
+          setState(() => _down = false);
+          widget.onTap();
+        },
+        onTapCancel: () => setState(() => _down = false),
+        behavior: HitTestBehavior.opaque,
+        child: AnimatedScale(
+          scale: _down
+              ? 0.97
+              : _hovered
+              ? 1.015
+              : 1.0,
+          duration: Duration(
+            milliseconds: _down
+                ? 90
+                : _hovered
+                ? 140
+                : 220,
           ),
-          child: Row(
-            children: [
-              // Avatar + rank badge
-              Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: isTop ? _navy : _bg,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Center(
-                      child: Text(
-                        initials,
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w800,
-                          color: isTop ? _white : _navy,
-                        ),
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    bottom: -2,
-                    right: -2,
-                    child: Container(
-                      width: 18,
-                      height: 18,
+          curve: _strong,
+          child: Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: _white,
+              borderRadius: BorderRadius.circular(16),
+              border: isTop
+                  ? Border.all(color: _blue.withValues(alpha: 0.20))
+                  : null,
+              boxShadow: [
+                BoxShadow(
+                  color: isTop
+                      ? _blue.withValues(alpha: 0.08)
+                      : _navy.withValues(alpha: 0.05),
+                  blurRadius: isTop ? 16 : 10,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: Row(
+              children: [
+                // Avatar + rank badge
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
                       decoration: BoxDecoration(
-                        color: isTop ? _gold : _bg,
+                        color: isTop ? _navy : _bg,
                         shape: BoxShape.circle,
-                        border: Border.all(color: _white, width: 1.5),
                       ),
                       child: Center(
                         child: Text(
-                          '${widget.rank}',
+                          initials,
                           style: TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.w900,
-                            color: isTop ? _white : _muted,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                            color: isTop ? _white : _navy,
                           ),
                         ),
                       ),
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(width: 12),
-              // Name + bar
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
+                    Positioned(
+                      bottom: -2,
+                      right: -2,
+                      child: Container(
+                        width: 18,
+                        height: 18,
+                        decoration: BoxDecoration(
+                          color: isTop ? _gold : _bg,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: _white, width: 1.5),
+                        ),
+                        child: Center(
                           child: Text(
-                            name,
-                            style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                              color: _ink,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        TweenAnimationBuilder<double>(
-                          tween: Tween(
-                            begin: 0,
-                            end: m.assignedCount.toDouble(),
-                          ),
-                          duration: const Duration(milliseconds: 700),
-                          curve: _strong,
-                          builder: (_, v, w) => Text(
-                            '${v.round()}',
+                            '${widget.rank}',
                             style: TextStyle(
-                              fontSize: 18,
+                              fontSize: 9,
                               fontWeight: FontWeight.w900,
-                              color: isTop ? _navy : _muted,
-                              letterSpacing: -0.5,
+                              color: isTop ? _white : _muted,
                             ),
                           ),
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      m.latestTitulo ?? 'Sin asignaciones recientes',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: _muted.withValues(alpha: 0.65),
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                     ),
-                    const SizedBox(height: 8),
-                    LayoutBuilder(
-                      builder: (_, c) => Stack(
+                  ],
+                ),
+                const SizedBox(width: 12),
+                // Name + bar
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
                         children: [
-                          Container(
-                            height: 4,
-                            width: c.maxWidth,
-                            decoration: BoxDecoration(
-                              color: _bg,
-                              borderRadius: BorderRadius.circular(2),
+                          Expanded(
+                            child: Text(
+                              name,
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                                color: _ink,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                          AnimatedBuilder(
-                            animation: _barAnim,
-                            builder: (_, w) => Container(
-                              height: 4,
-                              width: (c.maxWidth * frac * _barAnim.value).clamp(
-                                0.0,
-                                c.maxWidth,
-                              ),
-                              decoration: BoxDecoration(
-                                color: isTop
-                                    ? _blue
-                                    : _blue.withValues(alpha: 0.4),
-                                borderRadius: BorderRadius.circular(2),
+                          TweenAnimationBuilder<double>(
+                            tween: Tween(
+                              begin: 0,
+                              end: m.assignedCount.toDouble(),
+                            ),
+                            duration: const Duration(milliseconds: 700),
+                            curve: _strong,
+                            builder: (_, v, w) => Text(
+                              '${v.round()}',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w900,
+                                color: isTop ? _navy : _muted,
+                                letterSpacing: -0.5,
                               ),
                             ),
                           ),
                         ],
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 2),
+                      Text(
+                        m.latestTitulo ?? 'Sin asignaciones recientes',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: _muted.withValues(alpha: 0.65),
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 8),
+                      LayoutBuilder(
+                        builder: (_, c) => Stack(
+                          children: [
+                            Container(
+                              height: 4,
+                              width: c.maxWidth,
+                              decoration: BoxDecoration(
+                                color: _bg,
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                            ),
+                            AnimatedBuilder(
+                              animation: _barAnim,
+                              builder: (_, w) => Container(
+                                height: 4,
+                                width: (c.maxWidth * frac * _barAnim.value)
+                                    .clamp(0.0, c.maxWidth),
+                                decoration: BoxDecoration(
+                                  color: isTop
+                                      ? _blue
+                                      : _blue.withValues(alpha: 0.4),
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(width: 10),
-              Icon(
-                CupertinoIcons.chevron_right,
-                size: 13,
-                color: _muted.withValues(alpha: 0.3),
-              ),
-            ],
+                const SizedBox(width: 10),
+                Icon(
+                  CupertinoIcons.chevron_right,
+                  size: 13,
+                  color: _muted.withValues(alpha: 0.3),
+                ),
+              ],
+            ),
           ),
         ),
       ),
-    ),
     );
   }
 }
@@ -2791,7 +3253,9 @@ class _DeclineCard extends StatelessWidget {
       final vendedores = users.where((u) => u.role != 'admin').toList();
       if (!context.mounted) return;
       if (box == null) return;
-      final overlay = Navigator.of(context).overlay!.context.findRenderObject() as RenderBox;
+      final overlay =
+          Navigator.of(context).overlay!.context.findRenderObject()
+              as RenderBox;
       final rect = box.localToGlobal(Offset.zero, ancestor: overlay) & box.size;
       final picked = await showMenu<AppUser>(
         context: context,
@@ -2800,11 +3264,21 @@ class _DeclineCard extends StatelessWidget {
         elevation: 12,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         constraints: const BoxConstraints(minWidth: 200, maxWidth: 300),
-        items: vendedores.map((v) => PopupMenuItem<AppUser>(
-          value: v,
-          padding: const EdgeInsets.symmetric(horizontal: 14),
-          child: Text(v.displayName, style: const TextStyle(fontSize: 13, color: Color(0xFF111827))),
-        )).toList(),
+        items: vendedores
+            .map(
+              (v) => PopupMenuItem<AppUser>(
+                value: v,
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                child: Text(
+                  v.displayName,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: Color(0xFF111827),
+                  ),
+                ),
+              ),
+            )
+            .toList(),
       );
       if (picked == null || !context.mounted) return;
       await ApiClient().forceAssign(decline.licitacionId, picked.id);
