@@ -519,6 +519,10 @@ pub async fn dashboard_stats(
             WHERE fecha_limite_oferta IS NULL
               OR  (fecha_limite_oferta::DATE - CURRENT_DATE) > 30
           )::INT                                         AS plazo_gt30,
+          COUNT(*) FILTER (
+            WHERE fecha_limite_oferta IS NOT NULL
+              AND fecha_limite_oferta::DATE < CURRENT_DATE
+          )::INT                                         AS plazo_caducadas,
           -- Importe ranges
           COUNT(*) FILTER (WHERE importe_licitacion < 50000)::INT            AS imp_lt50k,
           COUNT(*) FILTER (WHERE importe_licitacion BETWEEN 50000 AND 99999)::INT  AS imp_50_100k,
@@ -741,10 +745,11 @@ pub async fn dashboard_stats(
         "pending_declines":    declines_list,
         "breakdown": {
             "plazo": [
-                { "label": "< 7 días",    "value": "lt7",     "count": bk_global.get::<i32,_>("plazo_lt7")  },
-                { "label": "7 – 15 días", "value": "lt15",    "count": bk_global.get::<i32,_>("plazo_lt15") },
-                { "label": "16 – 30 días","value": "lt30",    "count": bk_global.get::<i32,_>("plazo_lt30") },
-                { "label": "> 30 días",   "value": "gt30",    "count": bk_global.get::<i32,_>("plazo_gt30") },
+                { "label": "< 7 días",    "value": "lt7",        "count": bk_global.get::<i32,_>("plazo_lt7")        },
+                { "label": "7 – 15 días", "value": "lt15",       "count": bk_global.get::<i32,_>("plazo_lt15")       },
+                { "label": "16 – 30 días","value": "lt30",       "count": bk_global.get::<i32,_>("plazo_lt30")       },
+                { "label": "> 30 días",   "value": "gt30",       "count": bk_global.get::<i32,_>("plazo_gt30")       },
+                { "label": "Caducadas",   "value": "caducadas",  "count": bk_global.get::<i32,_>("plazo_caducadas")  },
             ],
             "importe": [
                 { "label": "< 50K",        "value": "lt50k",    "count": bk_global.get::<i32,_>("imp_lt50k")    },

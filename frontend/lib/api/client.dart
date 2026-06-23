@@ -7,6 +7,8 @@ const _base = 'https://rm0vk0iw4f.execute-api.eu-west-3.amazonaws.com/prod';
 
 const chatStreamBase = 'https://n52c2kqdmznr5vlqkgiiuufk6e0qjubr.lambda-url.eu-west-3.on.aws';
 
+const summarizeBase = 'https://aqwv7iupruihcwhswkuzp45jsm0anhvi.lambda-url.eu-west-3.on.aws';
+
 class ApiClient {
   static final ApiClient _instance = ApiClient._();
   factory ApiClient() => _instance;
@@ -111,6 +113,8 @@ class ApiClient {
     String clienteNombre, {
     String? cotizacionXv,
     String? oportunidad,
+    String? cotizacionId,
+    String? oportunidadId,
     String? estado,
     List<String> divisiones = const [],
     bool fabricanteProteccion = false,
@@ -126,6 +130,8 @@ class ApiClient {
       body: jsonEncode({
         'cotizacion_xv': cotizacionXv,
         'oportunidad': oportunidad,
+        'cotizacion_id': cotizacionId,
+        'oportunidad_id': oportunidadId,
         'estado': estado,
         'divisiones': divisiones,
         'fabricante_proteccion': fabricanteProteccion,
@@ -353,6 +359,37 @@ class ApiClient {
   }
 
   // ── AI Summary ───────────────────────────────────────────────────────────────
+
+  /// Streams Resumen Liti tokens from the dedicated Haiku summarize Lambda.
+  /// Yields {"token":"..."} events then terminates (no session_id, no save needed
+  /// — the Lambda auto-saves on completion).
+  Stream<Map<String, dynamic>> summarizeStream(int licitacionId) async* {
+    final uri = Uri.parse(summarizeBase);
+    final headers = await _headers();
+    final request = http.Request('POST', uri);
+    request.headers.addAll(headers);
+    request.body = jsonEncode({'licitacion_id': licitacionId});
+
+    final streamed = await _http.send(request);
+    if (streamed.statusCode >= 400) throw Exception('Error ${streamed.statusCode}');
+
+    final pending = StringBuffer();
+    await for (final chunk in streamed.stream.transform(Utf8Decoder(allowMalformed: true))) {
+      pending.write(chunk);
+      var buf = pending.toString();
+      pending.clear();
+      final parts = buf.split('\n\n');
+      for (var i = 0; i < parts.length - 1; i++) {
+        for (final line in parts[i].split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          final data = line.substring(6);
+          if (data == '[DONE]') return;
+          try { yield jsonDecode(data) as Map<String, dynamic>; } catch (_) {}
+        }
+      }
+      pending.write(parts.last);
+    }
+  }
 
   Future<String?> getLicitacionSummary(int licitacionId) async {
     final res = await _http.get(
@@ -599,7 +636,7 @@ class ApiClient {
 
     // SSE parsing: accumulate bytes → split on \n\n → extract data: lines
     final pending = StringBuffer();
-    await for (final chunk in streamed.stream.transform(const Utf8Decoder(allowMalformed: true))) {
+    await for (final chunk in streamed.stream.transform(Utf8Decoder(allowMalformed: true))) {
       pending.write(chunk);
       var buf = pending.toString();
       pending.clear();

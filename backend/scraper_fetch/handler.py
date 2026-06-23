@@ -26,6 +26,7 @@ Environment variables required:
   DB_SECRET_ARN      – Aurora master secret ARN (refresh_open only)
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -253,9 +254,34 @@ def _download_documents(session, external_id: str, doc_links: list, bucket: str,
         "application/pdf",
         "application/msword",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel",
+        "application/zip",
+        "application/x-zip-compressed",
+        "application/vnd.oasis.opendocument.text",
+        "application/rtf",
+        "text/rtf",
     }
+    _MAGIC_TYPES = [
+        (b"%PDF",           "application/pdf",    ".pdf"),
+        (b"PK\x03\x04",    None,                  None),   # ZIP / OOXML — use Content-Disposition ext
+        (b"\xd0\xcf\x11\xe0", "application/msword", ".doc"),  # OLE2 (old .doc/.xls)
+    ]
+    _EXT_MAP = {
+        "application/pdf":    ".pdf",
+        "application/msword": ".doc",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+        "application/vnd.ms-excel": ".xls",
+        "application/zip":    ".zip",
+        "application/x-zip-compressed": ".zip",
+        "application/vnd.oasis.opendocument.text": ".odt",
+        "application/rtf":    ".rtf",
+        "text/rtf":           ".rtf",
+    }
+
     uploaded = []
-    for doc in doc_links[:10]:
+    for doc in doc_links:  # no cap — fetch every document the portal lists
         href   = doc["href"]
         nombre = doc["nombre"]
         url    = href if href.startswith("http") else f"{BASE}/{href.lstrip('/')}"
@@ -264,21 +290,37 @@ def _download_documents(session, external_id: str, doc_links: list, bucket: str,
             if resp.status_code != 200:
                 log.warning("doc %s → HTTP %d", nombre, resp.status_code)
                 continue
+
             content_type = resp.headers.get("Content-Type", "").split(";")[0].strip()
-            # Infer type from magic bytes if Content-Type is generic
+
+            # Infer type from magic bytes when Content-Type is generic/missing
             if content_type not in _ALLOWED_TYPES:
-                if resp.content[:4] == b"%PDF":
-                    content_type = "application/pdf"
+                inferred = None
+                for magic, ct, _ in _MAGIC_TYPES:
+                    if resp.content[:len(magic)] == magic:
+                        inferred = ct
+                        break
+                if inferred:
+                    content_type = inferred
                 else:
-                    log.info("Skipping doc %s (type=%s)", nombre, content_type)
+                    log.warning("Skipping doc %s (type=%s, no magic match)", nombre, content_type)
                     continue
-            ext = ".pdf" if content_type == "application/pdf" else (
-                  ".docx" if "openxmlformats" in content_type else ".doc")
+
+            # Derive file extension
+            ext = _EXT_MAP.get(content_type)
+            if ext is None:
+                # Fall back to Content-Disposition filename extension
+                cd = resp.headers.get("Content-Disposition", "")
+                m = re.search(r'filename=["\']?([^"\';\s]+)', cd)
+                ext = ("." + m.group(1).rsplit(".", 1)[-1].lower()) if m and "." in m.group(1) else ".bin"
+
             safe = re.sub(r"[^\w\- ]", "_", nombre)[:80].strip("_") or "documento"
-            # Disambiguate multiple "Documento" files from descarga-otros.php
-            id2_match = re.search(r"id2=(\d+)", href)
-            suffix = f"_{id2_match.group(1)}" if id2_match else ""
-            s3_key = f"documents/{external_id}/{safe}{suffix}{ext}"
+
+            # Use a short hash of the URL to guarantee uniqueness across all docs
+            # with identical names (e.g. multiple PDFs all labelled "Documento").
+            href_hash = hashlib.md5(href.encode()).hexdigest()[:8]
+            s3_key = f"documents/{external_id}/{safe}_{href_hash}{ext}"
+
             s3.put_object(Bucket=bucket, Key=s3_key, Body=resp.content, ContentType=content_type)
             uploaded.append({
                 "nombre":       nombre,
@@ -479,9 +521,16 @@ def _run_scrape_documents(event, context, creds, bucket):
         database="imliti",
         sql="""
             SELECT l.external_id FROM licitacion l
-            LEFT JOIN licitacion_documento ld ON ld.licitacion_id = l.id
             WHERE l.external_id IS NOT NULL
-              AND ld.id IS NULL
+              AND (
+                -- never scraped
+                NOT EXISTS (SELECT 1 FROM licitacion_documento ld WHERE ld.licitacion_id = l.id)
+                OR
+                -- scraped before the hash-based key fix: old keys have no 8-char hex suffix,
+                -- identifiable because they matched the old id2= pattern or had no suffix at all.
+                -- Re-scrape any licitacion with only 1 document (almost certainly a collision victim).
+                (SELECT COUNT(*) FROM licitacion_documento ld WHERE ld.licitacion_id = l.id) = 1
+              )
             ORDER BY l.id DESC
             LIMIT :lim OFFSET :off
         """,

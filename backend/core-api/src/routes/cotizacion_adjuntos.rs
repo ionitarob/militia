@@ -58,7 +58,7 @@ pub async fn list(
     .await
     .map_err(|e| format!("DB error: {e}"))?;
 
-    let presign_cfg = PresigningConfig::expires_in(Duration::from_secs(3600))
+    let presign_cfg = PresigningConfig::expires_in(Duration::from_secs(43200)) // 12 h
         .map_err(|e| format!("presign config: {e}"))?;
 
     let mut adjuntos = Vec::new();

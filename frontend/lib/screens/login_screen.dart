@@ -1,6 +1,7 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
 import '../services/auth_service.dart';
+import '../widgets/liti_chat_overlay.dart';
 import '../main.dart';
 import 'register_screen.dart';
 
@@ -149,6 +150,10 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
           child: child,
         ),
       ));
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        litiChat.authChanged();
+        litiChat.restoreSession();
+      });
     } catch (e) {
       HapticFeedback.heavyImpact();
       setState(() {

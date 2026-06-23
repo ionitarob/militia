@@ -395,6 +395,8 @@ class ClienteCotizacion {
   final String clienteNombre;
   final String? cotizacionXv;
   final String? oportunidad;
+  final String? cotizacionId;
+  final String? oportunidadId;
   final String? estado;
   final List<String> divisiones;
   final bool fabricanteProteccion;
@@ -407,6 +409,8 @@ class ClienteCotizacion {
     required this.clienteNombre,
     this.cotizacionXv,
     this.oportunidad,
+    this.cotizacionId,
+    this.oportunidadId,
     this.estado,
     this.divisiones = const [],
     this.fabricanteProteccion = false,
@@ -420,6 +424,8 @@ class ClienteCotizacion {
         clienteNombre:        j['cliente_nombre'] as String,
         cotizacionXv:         j['cotizacion_xv'] as String?,
         oportunidad:          j['oportunidad'] as String?,
+        cotizacionId:         j['cotizacion_id'] as String?,
+        oportunidadId:        j['oportunidad_id'] as String?,
         estado:               j['estado'] as String?,
         divisiones:           (j['divisiones'] as List<dynamic>?)
                                   ?.map((e) => e as String).toList() ?? [],
@@ -433,6 +439,8 @@ class ClienteCotizacion {
   ClienteCotizacion copyWith({
     String? cotizacionXv,
     String? oportunidad,
+    String? cotizacionId,
+    String? oportunidadId,
     String? estado,
     List<String>? divisiones,
     bool? fabricanteProteccion,
@@ -444,6 +452,8 @@ class ClienteCotizacion {
         clienteNombre:        clienteNombre,
         cotizacionXv:         cotizacionXv ?? this.cotizacionXv,
         oportunidad:          oportunidad ?? this.oportunidad,
+        cotizacionId:         cotizacionId ?? this.cotizacionId,
+        oportunidadId:        oportunidadId ?? this.oportunidadId,
         estado:               estado ?? this.estado,
         divisiones:           divisiones ?? this.divisiones,
         fabricanteProteccion: fabricanteProteccion ?? this.fabricanteProteccion,

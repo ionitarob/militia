@@ -11,6 +11,10 @@ path = "src/main.rs"
 name = "chat-stream"
 path = "src/bin/chat_stream.rs"
 
+[[bin]]
+name = "summarize"
+path = "src/bin/summarize.rs"
+
 [dependencies]
 # Lambda runtime
 lambda_http = "0.13"
@@ -47,3 +51,4 @@ uuid = { version = "1", features = ["v4"] }
 # Observability
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+pdf-extract = "0.10.0"

@@ -298,11 +298,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                                   const SizedBox(width: 8),
                                   Expanded(
                                     child: _StatTree(
-                                      parentLabel: 'Inactivas',
+                                      parentLabel: 'Caducadas',
                                       parentCount: _stats!.inactivas,
-                                      parentAccent: _muted,
+                                      parentAccent: _red,
                                       parentTooltip: 'Licitaciones fuera de fecha de presentación',
-                                      onParentTap: () => _nav(const LicitacionFilter(deadlineRange: 'caducadas', label: 'Inactivas')),
+                                      onParentTap: () => _nav(const LicitacionFilter(deadlineRange: 'caducadas', label: 'Caducadas')),
                                       children: [
                                         _StatLeaf(
                                           icon: CupertinoIcons.checkmark_seal_fill,
@@ -310,7 +310,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                                           count: _stats!.inactivasAdjudicadas,
                                           accent: _teal,
                                           good: true,
-                                          onTap: () => _nav(const LicitacionFilter(deadlineRange: 'caducadas', label: 'Inactivas adjudicadas')),
+                                          onTap: () => _nav(const LicitacionFilter(deadlineRange: 'caducadas', label: 'Caducadas adjudicadas')),
                                         ),
                                         _StatLeaf(
                                           icon: CupertinoIcons.xmark_circle_fill,
@@ -1223,6 +1223,7 @@ class _ScheduleCardState extends State<_ScheduleCard>
     LinearGradient(colors: [Color(0xFF2563EB), Color(0xFF60A5FA)]),
     LinearGradient(colors: [Color(0xFFF59E0B), Color(0xFFFBBF24)]),
     LinearGradient(colors: [Color(0xFF9CA3AF), Color(0xFFD1D5DB)]),
+    LinearGradient(colors: [Color(0xFFDC2626), Color(0xFFF87171)]), // Caducadas
   ];
 
   @override

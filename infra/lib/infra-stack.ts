@@ -178,6 +178,55 @@ export class InfraStack extends cdk.Stack {
       resources: ['*'],
     }));
 
+    // ── 4c. Summarize Lambda (Haiku, streaming SSE, no session overhead) ────────
+    // Purpose-built for Resumen Liti: parallel S3 doc downloads + Haiku inference.
+    // Uses the same RESPONSE_STREAM Function URL pattern as chat-stream.
+    const summarizeLambda = new RustFunction(this, 'SummarizeLambda', {
+      manifestPath: path.join(__dirname, '../../backend/core-api/Cargo.toml'),
+      binaryName: 'summarize',
+      bundling: {
+        assetHashType: cdk.AssetHashType.SOURCE,
+      },
+      architecture: cdk.aws_lambda.Architecture.ARM_64,
+      memorySize: 512,
+      timeout: cdk.Duration.seconds(90),
+      vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      environment: {
+        DB_SECRET_ARN:  dbCluster.secret?.secretArn ?? '',
+        JWT_SECRET_ARN: jwtSecret.secretArn,
+        RUST_LOG:       'info',
+        S3_BUCKET:      `imliti-scrapes-${this.account}`,
+      },
+    });
+
+    dbCluster.connections.allowFrom(summarizeLambda, ec2.Port.tcp(5432));
+    dbCluster.secret?.grantRead(summarizeLambda);
+    jwtSecret.grantRead(summarizeLambda);
+
+    summarizeLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+      resources: ['*'],
+    }));
+
+    // Cross-region inference profiles require Marketplace subscription checks.
+    summarizeLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['aws-marketplace:ViewSubscriptions', 'aws-marketplace:Subscribe'],
+      resources: ['*'],
+    }));
+
+    const summarizeUrl = summarizeLambda.addFunctionUrl({
+      authType: lambda.FunctionUrlAuthType.NONE,
+      invokeMode: lambda.InvokeMode.RESPONSE_STREAM,
+      cors: {
+        allowedOrigins: ['*'],
+        allowedHeaders: ['Authorization', 'Content-Type'],
+        allowedMethods: [lambda.HttpMethod.POST],
+        allowCredentials: false,
+        maxAge: cdk.Duration.hours(24),
+      },
+    });
+
     const chatStreamUrl = chatStreamLambda.addFunctionUrl({
       authType: lambda.FunctionUrlAuthType.NONE,
       invokeMode: lambda.InvokeMode.RESPONSE_STREAM,
@@ -386,6 +435,8 @@ export class InfraStack extends cdk.Stack {
     scrapeBucket.grantDelete(coreApiLambda, 'cotizaciones/*');
     scrapeBucket.grantRead(chatStreamLambda, 'documents/*');
     scrapeBucket.grantRead(chatStreamLambda, 'cotizaciones/*');
+    scrapeBucket.grantRead(summarizeLambda, 'documents/*');
+    scrapeBucket.grantRead(summarizeLambda, 'cotizaciones/*');
 
     // Public read for app/ prefix — allows the desktop client to download
     // the update manifest and release zips without authentication.
@@ -525,6 +576,11 @@ export class InfraStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ChatStreamUrl', {
       value: chatStreamUrl.url,
       description: 'Lambda Function URL for streaming chat (bypasses API GW 29s timeout)',
+    });
+
+    new cdk.CfnOutput(this, 'SummarizeUrl', {
+      value: summarizeUrl.url,
+      description: 'Lambda Function URL for Resumen Liti (Haiku, fast)',
     });
   }
 }

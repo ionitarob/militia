@@ -46,73 +46,192 @@ pub struct DocBlob {
 }
 
 pub async fn fetch_licitacion_docs(state: &AppState, licitacion_id: i64) -> Vec<DocBlob> {
-    let mut docs: Vec<DocBlob> = Vec::new();
+    fetch_licitacion_docs_limited(state, licitacion_id, MAX_DOCS, MAX_DOC_BYTES).await
+}
 
-    // 1. Portal documents (licitacion_documento)
+pub async fn fetch_licitacion_docs_limited(
+    state: &AppState,
+    licitacion_id: i64,
+    max_docs: usize,
+    max_bytes: usize,
+) -> Vec<DocBlob> {
+    let mut keys: Vec<(String, String, Option<String>)> = Vec::new();
+
     if let Ok(rows) = sqlx::query_as::<_, (String, String, Option<String>)>(
-        "SELECT nombre, s3_key, content_type FROM licitacion_documento WHERE licitacion_id = $1 ORDER BY id ASC"
+        "SELECT nombre, s3_key, content_type FROM licitacion_documento \
+         WHERE licitacion_id = $1 ORDER BY id ASC LIMIT $2",
+    )
+    .bind(licitacion_id as i32)
+    .bind(max_docs as i32)
+    .fetch_all(&state.pool)
+    .await
+    {
+        keys.extend(rows);
+    }
+
+    if keys.len() < max_docs {
+        let remaining = (max_docs - keys.len()) as i32;
+        if let Ok(rows) = sqlx::query_as::<_, (String, String, Option<String>)>(
+            "SELECT nombre, s3_key, content_type FROM cotizacion_adjunto \
+             WHERE licitacion_id = $1 ORDER BY id ASC LIMIT $2",
+        )
+        .bind(licitacion_id as i32)
+        .bind(remaining)
+        .fetch_all(&state.pool)
+        .await
+        {
+            keys.extend(rows);
+        }
+    }
+
+    let futures: Vec<_> = keys.into_iter().map(|(nombre, s3_key, ct)| {
+        let s3_client = state.s3_client.clone();
+        let s3_bucket = state.s3_bucket.clone();
+        async move { download_s3_doc_owned(s3_client, s3_bucket, s3_key, nombre, ct, max_bytes).await }
+    }).collect();
+
+    futures_util::future::join_all(futures)
+        .await
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// Smart document selector for AI summaries.
+/// Scores all available docs by relevance, deduplicates by byte size,
+/// and picks the best ones within a total byte budget.
+pub async fn fetch_summary_docs(state: &AppState, licitacion_id: i64) -> Vec<DocBlob> {
+    const TOTAL_BUDGET: usize = 3_000_000; // 3 MB total — ~60–80 PDF pages
+    const MAX_SUMMARY_DOCS: usize = 3;
+
+    // Fetch all portal doc metadata (no LIMIT — we need to rank them all)
+    let mut candidates: Vec<(String, String, Option<String>)> = Vec::new();
+    if let Ok(rows) = sqlx::query_as::<_, (String, String, Option<String>)>(
+        "SELECT nombre, s3_key, content_type FROM licitacion_documento \
+         WHERE licitacion_id = $1 ORDER BY id ASC",
     )
     .bind(licitacion_id as i32)
     .fetch_all(&state.pool)
     .await
     {
-        for (nombre, s3_key, ct) in rows {
-            if docs.len() >= MAX_DOCS { break; }
-            if let Some(blob) = download_s3_doc(state, &s3_key, &nombre, ct.as_deref()).await {
-                docs.push(blob);
-            }
-        }
+        candidates.extend(rows);
     }
 
-    // 2. Internal attachments (cotizacion_adjunto)
-    if docs.len() < MAX_DOCS {
-        if let Ok(rows) = sqlx::query_as::<_, (String, String, Option<String>)>(
-            "SELECT nombre, s3_key, content_type FROM cotizacion_adjunto WHERE licitacion_id = $1 ORDER BY id ASC"
+    // Sort by priority (lower score = more useful for a summary)
+    candidates.sort_by_key(|(nombre, _, _)| doc_summary_score(nombre));
+
+    // Download in priority order, dedup by exact byte size, stop at budget
+    let mut docs: Vec<DocBlob> = Vec::new();
+    let mut seen_sizes = std::collections::HashSet::<usize>::new();
+    let mut total_bytes = 0usize;
+
+    for (nombre, s3_key, ct) in candidates {
+        if docs.len() >= MAX_SUMMARY_DOCS || total_bytes >= TOTAL_BUDGET {
+            break;
+        }
+        let remaining_budget = TOTAL_BUDGET - total_bytes;
+        let blob = download_s3_doc_owned(
+            state.s3_client.clone(),
+            state.s3_bucket.clone(),
+            s3_key,
+            nombre,
+            ct,
+            remaining_budget,
         )
-        .bind(licitacion_id as i32)
-        .fetch_all(&state.pool)
-        .await
-        {
-            for (nombre, s3_key, ct) in rows {
-                if docs.len() >= MAX_DOCS { break; }
-                if let Some(blob) = download_s3_doc(state, &s3_key, &nombre, ct.as_deref()).await {
-                    docs.push(blob);
-                }
+        .await;
+        if let Some(b) = blob {
+            let size = b.data.len();
+            if seen_sizes.contains(&size) {
+                continue; // exact duplicate — skip
             }
+            seen_sizes.insert(size);
+            total_bytes += size;
+            docs.push(b);
         }
     }
 
     docs
 }
 
-pub async fn download_s3_doc(state: &AppState, s3_key: &str, nombre: &str, content_type: Option<&str>) -> Option<DocBlob> {
-    let media_type = match content_type {
+/// Score a document name for summary usefulness.
+/// Lower = more important. Based on Spanish procurement naming conventions.
+fn doc_summary_score(nombre: &str) -> u8 {
+    // Normalise: lowercase + strip common accent/ñ variants
+    let n = nombre.to_lowercase();
+    let n = n
+        .replace(['á', 'à', 'â'], "a")
+        .replace(['é', 'è', 'ê'], "e")
+        .replace(['í', 'ì', 'î'], "i")
+        .replace(['ó', 'ò', 'ô'], "o")
+        .replace(['ú', 'ù', 'û'], "u")
+        .replace('ñ', "n");
+
+    // Pliego de Prescripciones Técnicas (PPT) — the most useful document
+    if n.contains("prescripcion") || n.contains("tecni") && n.contains("pliego")
+        || n.contains("ppt")
+        || (n.contains("tecni") && (n.contains("condicion") || n.contains("clausula")))
+    {
+        return 1;
+    }
+
+    // Pliego de Cláusulas Administrativas Particulares (PCAP) & anuncio
+    if n.contains("anuncio") || n.contains("pcap")
+        || (n.contains("administrativ") && n.contains("pliego"))
+        || (n.contains("clausula") && n.contains("administrativ"))
+        || n.contains("convocatoria")
+    {
+        return 2;
+    }
+
+    // Generic pliego or main document
+    if n.contains("pliego") || n.contains("condicion") || n.contains("especificacion") {
+        return 3;
+    }
+
+    // Templates, forms and declarations — low value for AI summaries
+    if n.contains("anexo") || n.contains("modelo") || n.contains("declaracion")
+        || n.contains("oferta") || n.contains("solicitud") || n.contains("formulario")
+    {
+        return 10;
+    }
+
+    4 // everything else
+}
+
+async fn download_s3_doc_owned(
+    s3_client: aws_sdk_s3::Client,
+    s3_bucket: String,
+    s3_key: String,
+    nombre: String,
+    content_type: Option<String>,
+    max_bytes: usize,
+) -> Option<DocBlob> {
+    let media_type = resolve_media_type(content_type.as_deref(), &nombre);
+    let output = s3_client.get_object().bucket(&s3_bucket).key(&s3_key).send().await.ok()?;
+    let bytes = output.body.collect().await.ok()?.into_bytes();
+    if bytes.len() > max_bytes { return None; }
+    Some(DocBlob { nombre, media_type: media_type.to_string(), data: bytes.to_vec() })
+}
+
+pub fn resolve_media_type<'a>(content_type: Option<&'a str>, nombre: &str) -> &'a str {
+    match content_type {
         Some(ct) if ct.contains("pdf") => "application/pdf",
-        Some(ct) if ct.contains("word") || ct.contains("docx") => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        Some(ct) if ct.contains("word") || ct.contains("docx") => {
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        }
         Some(ct) if ct.contains("text") => "text/plain",
         _ if nombre.to_lowercase().ends_with(".pdf") => "application/pdf",
         _ if nombre.to_lowercase().ends_with(".txt") => "text/plain",
-        _ => "application/pdf", // assume PDF for unknown types
-    };
-
-    let result = state.s3_client
-        .get_object()
-        .bucket(&state.s3_bucket)
-        .key(s3_key)
-        .send()
-        .await;
-
-    let output = result.ok()?;
-    let bytes = output.body.collect().await.ok()?.into_bytes();
-    if bytes.len() > MAX_DOC_BYTES {
-        return None; // skip oversized files
+        _ => "application/pdf",
     }
+}
 
-    Some(DocBlob {
-        nombre: nombre.to_string(),
-        media_type: media_type.to_string(),
-        data: bytes.to_vec(),
-    })
+pub async fn download_s3_doc(state: &AppState, s3_key: &str, nombre: &str, content_type: Option<&str>) -> Option<DocBlob> {
+    let media_type = resolve_media_type(content_type, nombre);
+    let output = state.s3_client.get_object().bucket(&state.s3_bucket).key(s3_key).send().await.ok()?;
+    let bytes = output.body.collect().await.ok()?.into_bytes();
+    if bytes.len() > MAX_DOC_BYTES { return None; }
+    Some(DocBlob { nombre: nombre.to_string(), media_type: media_type.to_string(), data: bytes.to_vec() })
 }
 
 pub async fn send(state: Arc<AppState>, event: Request) -> Result<Response<Body>, Error> {

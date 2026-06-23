@@ -67,6 +67,8 @@ struct ClientCotizacionDto {
     cliente_nombre: String,
     cotizacion_xv: Option<String>,
     oportunidad: Option<String>,
+    cotizacion_id: Option<String>,
+    oportunidad_id: Option<String>,
     estado: Option<String>,
     divisiones: Vec<String>,
     fabricante_proteccion: bool,
@@ -105,6 +107,8 @@ pub struct CreateLicitacionRequest {
 struct ClientCotizacionRequest {
     cotizacion_xv: Option<String>,
     oportunidad: Option<String>,
+    cotizacion_id: Option<String>,
+    oportunidad_id: Option<String>,
     estado: Option<String>,
     divisiones: Option<Vec<String>>,
     fabricante_proteccion: Option<bool>,
@@ -506,8 +510,8 @@ pub async fn list_client_cotizaciones(
     lid: i64,
 ) -> Result<Response<Body>, Error> {
     let rows = sqlx::query(
-        r#"SELECT cliente_nombre, cotizacion_xv, oportunidad, estado,
-                  divisiones, fabricante_proteccion, fabricante_nombre,
+        r#"SELECT cliente_nombre, cotizacion_xv, oportunidad, cotizacion_id, oportunidad_id,
+                  estado, divisiones, fabricante_proteccion, fabricante_nombre,
                   se_presenta, user_id, va_con_pliego
            FROM licitacion_cotizacion
            WHERE licitacion_id = $1
@@ -526,6 +530,8 @@ pub async fn list_client_cotizaciones(
                 cliente_nombre:        r.get("cliente_nombre"),
                 cotizacion_xv:         r.try_get("cotizacion_xv").ok().flatten(),
                 oportunidad:           r.try_get("oportunidad").ok().flatten(),
+                cotizacion_id:         r.try_get("cotizacion_id").ok().flatten(),
+                oportunidad_id:        r.try_get("oportunidad_id").ok().flatten(),
                 estado:                r.try_get("estado").ok().flatten(),
                 divisiones:            r.try_get::<Vec<String>, _>("divisiones").unwrap_or_default(),
                 fabricante_proteccion: r.try_get("fabricante_proteccion").ok().unwrap_or(false),
@@ -565,7 +571,8 @@ pub async fn upsert_client_cotizacion(
     };
 
     let divisiones = req.divisiones.clone().unwrap_or_default();
-    let user_id_val = req.user_id;
+    // Always derive from the authenticated JWT — never trust the client-supplied user_id.
+    let user_id_val: Option<i64> = Some(claims.sub as i64);
 
     let is_empty = req.cotizacion_xv.as_deref().unwrap_or("").trim().is_empty()
         && req.oportunidad.as_deref().unwrap_or("").trim().is_empty()
@@ -608,23 +615,28 @@ pub async fn upsert_client_cotizacion(
         sqlx::query(
             r#"INSERT INTO licitacion_cotizacion
                    (licitacion_id, cliente_nombre, cotizacion_xv, oportunidad,
+                    cotizacion_id, oportunidad_id,
                     estado, divisiones, fabricante_proteccion, fabricante_nombre,
                     se_presenta, user_id, va_con_pliego)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                ON CONFLICT (licitacion_id, cliente_nombre, COALESCE(user_id, -1))
                DO UPDATE SET cotizacion_xv         = $3,
                              oportunidad           = $4,
-                             estado                = $5,
-                             divisiones            = $6,
-                             fabricante_proteccion = $7,
-                             fabricante_nombre     = $8,
-                             se_presenta           = $9,
-                             va_con_pliego         = $11"#,
+                             cotizacion_id         = $5,
+                             oportunidad_id        = $6,
+                             estado                = $7,
+                             divisiones            = $8,
+                             fabricante_proteccion = $9,
+                             fabricante_nombre     = $10,
+                             se_presenta           = $11,
+                             va_con_pliego         = $13"#,
         )
         .bind(lid)
         .bind(&cliente)
         .bind(req.cotizacion_xv.as_deref())
         .bind(req.oportunidad.as_deref())
+        .bind(req.cotizacion_id.as_deref())
+        .bind(req.oportunidad_id.as_deref())
         .bind(req.estado.as_deref())
         .bind(&divisiones)
         .bind(req.fabricante_proteccion.unwrap_or(false))

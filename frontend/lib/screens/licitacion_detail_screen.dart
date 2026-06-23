@@ -2,7 +2,7 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart'
-    show PopupMenuItem, RelativeRect, showMenu;
+    show PopupMenuItem, RelativeRect, Scrollbar, SelectionArea, showMenu;
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:http/http.dart' as http;
@@ -172,6 +172,7 @@ class _LicitacionDetailScreenState extends State<LicitacionDetailScreen> {
 
   List<StageHistoryItem> _stageHistory = [];
   bool _loadingHistory = true;
+  final ScrollController _historialScrollCtrl = ScrollController();
 
   bool get _isAdmin => AuthService().currentUser?.role == 'admin';
   bool get _canEdit =>
@@ -197,6 +198,12 @@ class _LicitacionDetailScreenState extends State<LicitacionDetailScreen> {
       '${_lic.fechaLimiteOferta != null ? "Fecha límite: ${_lic.fechaLimiteOferta}" : ""}',
       licitacionId: _lic.id,
     );
+  }
+
+  @override
+  void dispose() {
+    _historialScrollCtrl.dispose();
+    super.dispose();
   }
 
   Future<void> _loadAdjudicacion() async {
@@ -376,6 +383,8 @@ class _LicitacionDetailScreenState extends State<LicitacionDetailScreen> {
     String cliente,
     String? xv,
     String? opp,
+    String? cotizacionId,
+    String? oportunidadId,
     String? estado,
     List<String> divisiones,
     bool fabricanteProteccion,
@@ -383,15 +392,19 @@ class _LicitacionDetailScreenState extends State<LicitacionDetailScreen> {
     bool? vaConPliego,
   ) async {
     try {
+      final me = AuthService().currentUser;
       await ApiClient().upsertClienteCotizacion(
         _lic.id,
         cliente,
         cotizacionXv: xv,
         oportunidad: opp,
+        cotizacionId: cotizacionId,
+        oportunidadId: oportunidadId,
         estado: estado,
         divisiones: divisiones,
         fabricanteProteccion: false,
         fabricanteNombre: null,
+        userId: me?.id,
         vaConPliego: vaConPliego,
       );
       if (mounted) {
@@ -400,14 +413,23 @@ class _LicitacionDetailScreenState extends State<LicitacionDetailScreen> {
             clienteNombre: cliente,
             cotizacionXv: xv,
             oportunidad: opp,
+            cotizacionId: cotizacionId,
+            oportunidadId: oportunidadId,
             estado: estado,
             divisiones: divisiones,
             fabricanteProteccion: false,
             fabricanteNombre: null,
+            userId: me?.id,
             vaConPliego: vaConPliego,
           );
           // Auto-advance pipeline stage from client estados (never override terminal outcomes)
-          const terminal = {'ganada', 'perdida', 'rechazada', 'desierta', 'presentada'};
+          const terminal = {
+            'ganada',
+            'perdida',
+            'rechazada',
+            'desierta',
+            'presentada',
+          };
           if (!terminal.contains(_lic.pipelineStage)) {
             final all = _cotizaciones.values;
             final String derived;
@@ -497,52 +519,54 @@ class _LicitacionDetailScreenState extends State<LicitacionDetailScreen> {
           ),
         ),
         child: SafeArea(
-          child: Column(
-            children: [
-              // ── 50 / 50 body ───────────────────────────────────────────────
-              Expanded(
-                child: LayoutBuilder(
-                  builder: (ctx, c) {
-                    final wide = c.maxWidth >= 680;
-                    if (wide) {
-                      return Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          SizedBox(
-                            width: c.maxWidth * 0.48,
-                            child: _LeftPanel(
+          child: SelectionArea(
+            child: Column(
+              children: [
+                // ── 50 / 50 body ───────────────────────────────────────────────
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (ctx, c) {
+                      final wide = c.maxWidth >= 680;
+                      if (wide) {
+                        return Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SizedBox(
+                              width: c.maxWidth * 0.48,
+                              child: _LeftPanel(
+                                lic: _lic,
+                                docs: _docs,
+                                loadingDocs: _loadingDocs,
+                                adjudicacion: _adjudicacion,
+                              ),
+                            ),
+                            Container(width: 1, color: _border),
+                            Expanded(child: _buildRightPanel()),
+                          ],
+                        );
+                      }
+                      return SingleChildScrollView(
+                        child: Column(
+                          children: [
+                            _LeftPanel(
                               lic: _lic,
                               docs: _docs,
                               loadingDocs: _loadingDocs,
-                              adjudicacion: _adjudicacion,
                             ),
-                          ),
-                          Container(width: 1, color: _border),
-                          Expanded(child: _buildRightPanel()),
-                        ],
+                            Container(height: 1, color: _border),
+                            _buildRightPanel(scroll: false),
+                          ],
+                        ),
                       );
-                    }
-                    return SingleChildScrollView(
-                      child: Column(
-                        children: [
-                          _LeftPanel(
-                            lic: _lic,
-                            docs: _docs,
-                            loadingDocs: _loadingDocs,
-                          ),
-                          Container(height: 1, color: _border),
-                          _buildRightPanel(scroll: false),
-                        ],
-                      ),
-                    );
-                  },
+                    },
+                  ),
                 ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+              ],
+            ), // Column
+          ), // SelectionArea
+        ), // SafeArea
+      ), // CupertinoPageScaffold
+    ); // PopScope
   }
 
   // ── Right panel (vendedor tools) ──────────────────────────────────────────
@@ -632,7 +656,7 @@ class _LicitacionDetailScreenState extends State<LicitacionDetailScreen> {
         // Clientes
         _PanelSection(
           icon: CupertinoIcons.table,
-          label: 'Pendientes de Fase I',
+          label: 'Cotizaciones',
           color: _navy,
           child: _loadingCotizaciones
               ? const Padding(
@@ -647,7 +671,6 @@ class _LicitacionDetailScreenState extends State<LicitacionDetailScreen> {
                   canEdit: _canEdit,
                   licitacionId: _lic.id,
                   isRechazada: _lic.pipelineStage == 'rechazada',
-                  onRechazar: _onRechazar,
                 ),
         ),
 
@@ -869,73 +892,93 @@ class _LicitacionDetailScreenState extends State<LicitacionDetailScreen> {
                     style: TextStyle(fontSize: 13, color: _muted),
                   ),
                 )
-              : Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      for (int i = 0; i < _stageHistory.length; i++) ...[
-                        if (i > 0) const SizedBox(height: 12),
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Icon(
-                              CupertinoIcons.circle_fill,
-                              size: 8,
-                              color: Color(0xFF8B5CF6),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
+              : ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 300),
+                  child: Scrollbar(
+                    controller: _historialScrollCtrl,
+                    thumbVisibility: true,
+                    radius: const Radius.circular(4),
+                    thickness: 3,
+                    child: SingleChildScrollView(
+                      controller: _historialScrollCtrl,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          for (int i = 0; i < _stageHistory.length; i++) ...[
+                            if (i > 0) const SizedBox(height: 12),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Icon(
+                                  CupertinoIcons.circle_fill,
+                                  size: 8,
+                                  color: Color(0xFF8B5CF6),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
-                                      Text(
-                                        _translateStage(_stageHistory[i].stage),
-                                        style: const TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.bold,
-                                          color: _navy,
-                                        ),
+                                      Row(
+                                        children: [
+                                          Text(
+                                            _translateStage(
+                                              _stageHistory[i].stage,
+                                            ),
+                                            style: const TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.bold,
+                                              color: _navy,
+                                            ),
+                                          ),
+                                          const Spacer(),
+                                          Text(
+                                            _fmtHistoryDate(
+                                              _stageHistory[i].changedAt,
+                                            ),
+                                            style: const TextStyle(
+                                              fontSize: 11,
+                                              color: _muted,
+                                            ),
+                                          ),
+                                        ],
                                       ),
-                                      const Spacer(),
-                                      Text(
-                                        _fmtHistoryDate(
-                                          _stageHistory[i].changedAt,
+                                      if (_stageHistory[i].userNombre !=
+                                          null) ...[
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          'Por: ${_stageHistory[i].userNombre}',
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            color: _muted,
+                                          ),
                                         ),
-                                        style: const TextStyle(
-                                          fontSize: 11,
-                                          color: _muted,
-                                        ),
-                                      ),
+                                      ],
                                     ],
                                   ),
-                                  if (_stageHistory[i].userNombre != null) ...[
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      'Por: ${_stageHistory[i].userNombre}',
-                                      style: const TextStyle(
-                                        fontSize: 11,
-                                        color: _muted,
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ),
+                                ),
+                              ],
                             ),
                           ],
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
+                        ],
+                      ),
+                    ),
+                  ), // SingleChildScrollView
+                ), // Scrollbar
+        ), // ConstrainedBox
+        // Rechazado — at the very bottom; rejects the entire pliego
+        _RechazadoSection(
+          isRechazada: _lic.pipelineStage == 'rechazada',
+          canEdit: _canEdit,
+          onRechazar: _onRechazar,
         ),
 
-        const SizedBox(height: 40),
+        const SizedBox(height: 100),
       ],
     );
 
@@ -1879,6 +1922,8 @@ class _ClientesTable extends StatefulWidget {
     String cliente,
     String? xv,
     String? opp,
+    String? cotizacionId,
+    String? oportunidadId,
     String? estado,
     List<String> divisiones,
     bool fabricanteProteccion,
@@ -1889,7 +1934,6 @@ class _ClientesTable extends StatefulWidget {
   final bool canEdit;
   final int licitacionId;
   final bool isRechazada;
-  final Future<void> Function(bool rechazada, String? motivo) onRechazar;
 
   const _ClientesTable({
     required this.clientes,
@@ -1899,7 +1943,6 @@ class _ClientesTable extends StatefulWidget {
     required this.canEdit,
     required this.licitacionId,
     required this.isRechazada,
-    required this.onRechazar,
   });
 
   @override
@@ -1908,7 +1951,16 @@ class _ClientesTable extends StatefulWidget {
 
 class _ClientesTableState extends State<_ClientesTable> {
   final Set<String> _checked = {};
-  final Map<String, (TextEditingController, TextEditingController)> _ctrls = {};
+  final Map<
+    String,
+    (
+      TextEditingController,
+      TextEditingController,
+      TextEditingController,
+      TextEditingController,
+    )
+  >
+  _ctrls = {};
   final Map<String, List<String>> _divisiones = {};
   final Map<String, String?> _estado = {};
   final Map<String, bool?> _vaConPliego = {};
@@ -1916,12 +1968,11 @@ class _ClientesTableState extends State<_ClientesTable> {
   final Map<String, TextEditingController> _fabricanteNombreCtrls = {};
   final Set<String> _saving = {};
   final Set<String> _editing = {};
-  late bool _isRechazada;
+  final Set<int?> _expandedCompaneros = {};
 
   @override
   void initState() {
     super.initState();
-    _isRechazada = widget.isRechazada;
     for (final c in widget.cotizaciones.keys) {
       final d = widget.cotizaciones[c]!;
       if ((d.cotizacionXv?.isNotEmpty ?? false) ||
@@ -1933,13 +1984,17 @@ class _ClientesTableState extends State<_ClientesTable> {
         _ctrls[c] = (
           TextEditingController(text: d.cotizacionXv ?? ''),
           TextEditingController(text: d.oportunidad ?? ''),
+          TextEditingController(text: d.cotizacionId ?? ''),
+          TextEditingController(text: d.oportunidadId ?? ''),
         );
         _divisiones[c] = List<String>.from(d.divisiones);
         _estado[c] = d.estado;
         _vaConPliego[c] = d.vaConPliego;
       }
       _fabricanteProteccion[c] = d.fabricanteProteccion;
-      _fabricanteNombreCtrls[c] = TextEditingController(text: d.fabricanteNombre ?? '');
+      _fabricanteNombreCtrls[c] = TextEditingController(
+        text: d.fabricanteNombre ?? '',
+      );
     }
   }
 
@@ -1948,6 +2003,8 @@ class _ClientesTableState extends State<_ClientesTable> {
     for (final p in _ctrls.values) {
       p.$1.dispose();
       p.$2.dispose();
+      p.$3.dispose();
+      p.$4.dispose();
     }
     for (final c in _fabricanteNombreCtrls.values) {
       c.dispose();
@@ -1969,14 +2026,29 @@ class _ClientesTableState extends State<_ClientesTable> {
         _fabricanteNombreCtrls.remove(cliente);
         _ctrls[cliente]?.$1.dispose();
         _ctrls[cliente]?.$2.dispose();
+        _ctrls[cliente]?.$3.dispose();
+        _ctrls[cliente]?.$4.dispose();
         _ctrls.remove(cliente);
-        widget.onSave(cliente, null, null, null, [], false, null, null);
+        widget.onSave(
+          cliente,
+          null,
+          null,
+          null,
+          null,
+          null,
+          [],
+          false,
+          null,
+          null,
+        );
       } else {
         _checked.add(cliente);
         final d = widget.cotizaciones[cliente];
         _ctrls[cliente] = (
           TextEditingController(text: d?.cotizacionXv ?? ''),
           TextEditingController(text: d?.oportunidad ?? ''),
+          TextEditingController(text: d?.cotizacionId ?? ''),
+          TextEditingController(text: d?.oportunidadId ?? ''),
         );
         _divisiones[cliente] = d?.divisiones != null
             ? List<String>.from(d!.divisiones)
@@ -1984,7 +2056,9 @@ class _ClientesTableState extends State<_ClientesTable> {
         _estado[cliente] = d?.estado;
         _vaConPliego[cliente] = d?.vaConPliego;
         _fabricanteProteccion[cliente] = d?.fabricanteProteccion ?? false;
-        _fabricanteNombreCtrls[cliente] = TextEditingController(text: d?.fabricanteNombre ?? '');
+        _fabricanteNombreCtrls[cliente] = TextEditingController(
+          text: d?.fabricanteNombre ?? '',
+        );
       }
     });
   }
@@ -1995,21 +2069,26 @@ class _ClientesTableState extends State<_ClientesTable> {
     setState(() => _saving.add(cliente));
     final fabProteccion = _fabricanteProteccion[cliente] ?? false;
     final fabNombre = _fabricanteNombreCtrls[cliente]?.text.trim();
-    await widget.onSave(
-      cliente,
-      p.$1.text.trim().isEmpty ? null : p.$1.text.trim(),
-      p.$2.text.trim().isEmpty ? null : p.$2.text.trim(),
-      _estado[cliente],
-      _divisiones[cliente] ?? [],
-      fabProteccion,
-      fabProteccion && (fabNombre?.isNotEmpty ?? false) ? fabNombre : null,
-      _vaConPliego[cliente],
-    );
-    if (mounted) {
-      setState(() {
-        _saving.remove(cliente);
-        _editing.remove(cliente);
-      });
+    try {
+      await widget.onSave(
+        cliente,
+        p.$1.text.trim().isEmpty ? null : p.$1.text.trim(),
+        p.$2.text.trim().isEmpty ? null : p.$2.text.trim(),
+        p.$3.text.trim().isEmpty ? null : p.$3.text.trim(),
+        p.$4.text.trim().isEmpty ? null : p.$4.text.trim(),
+        _estado[cliente],
+        _divisiones[cliente] ?? [],
+        fabProteccion,
+        fabProteccion && (fabNombre?.isNotEmpty ?? false) ? fabNombre : null,
+        _vaConPliego[cliente],
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _saving.remove(cliente);
+          _editing.remove(cliente);
+        });
+      }
     }
   }
 
@@ -2422,20 +2501,15 @@ class _ClientesTableState extends State<_ClientesTable> {
 
     final currentUserId = AuthService().currentUser?.id;
 
-    // Group checked clients by their userId (owner comercial)
-    final Map<int?, List<String>> byComercial = {};
-    for (final c in checked) {
-      final uid = widget.cotizaciones[c]?.userId ?? currentUserId;
-      byComercial.putIfAbsent(uid, () => []).add(c);
-    }
-    // Put current user first, then others
-    final orderedIds = [
-      if (byComercial.containsKey(currentUserId)) currentUserId,
-      ...byComercial.keys.where((id) => id != currentUserId),
-    ];
+    // For legacy records with null userId: attribute to the sole assignee if
+    // there is only one; otherwise the owner is unknown.
+    final int? soloAssigneeId = widget.assignees.length == 1
+        ? widget.assignees.first.id
+        : null;
 
     String nameFor(int? uid) {
-      if (uid == null || uid == currentUserId) {
+      if (uid == null) return 'Sin asignar';
+      if (uid == currentUserId) {
         final u = AuthService().currentUser;
         return u?.nombre ?? u?.email.split('@').first ?? 'Yo';
       }
@@ -2446,18 +2520,82 @@ class _ClientesTableState extends State<_ClientesTable> {
       return a.displayName;
     }
 
+    // Split into mine vs. compañeros.
+    // Newly-checked entries not yet saved have no cotizacion record — treat as mine.
+    // Saved records with null userId fall back to soloAssigneeId (legacy backfill).
+    final myClients = <String>[];
+    final Map<int?, List<String>> byCompanero = {};
+    for (final c in checked) {
+      final saved = widget.cotizaciones[c];
+      final int? uid;
+      if (saved == null) {
+        uid = currentUserId;
+      } else {
+        uid = saved.userId ?? soloAssigneeId;
+      }
+      if (uid == currentUserId) {
+        myClients.add(c);
+      } else {
+        byCompanero.putIfAbsent(uid, () => []).add(c);
+      }
+    }
+
+    // Order compañeros deterministically: known users by name, null last
+    final knownCompaneroIds =
+        byCompanero.keys.where((id) => id != null).toList()
+          ..sort((a, b) => nameFor(a).compareTo(nameFor(b)));
+    final companeroIds = [
+      ...knownCompaneroIds,
+      if (byCompanero.containsKey(null)) null,
+    ];
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        for (final uid in orderedIds) ...[
+        if (myClients.isNotEmpty) ...[
           const SizedBox(height: 10),
-          _buildSectionHeader(nameFor(uid).toUpperCase()),
-          ...byComercial[uid]!.map(_buildCard),
+          _buildSectionHeader(
+            'MIS COTIZACIONES',
+            accent: const Color(0xFF2563EB),
+            bg: const Color(0xFFEFF6FF),
+            icon: CupertinoIcons.person_fill,
+          ),
+          ...myClients.map(
+            (c) => _buildCard(c, cardAccent: const Color(0xFF2563EB)),
+          ),
+          if (widget.canEdit && !widget.isRechazada)
+            Align(
+              alignment: Alignment.centerRight,
+              child: GestureDetector(
+                onTap: () => _showAddPicker(context),
+                behavior: HitTestBehavior.opaque,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 4, 14, 8),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        CupertinoIcons.plus_circle,
+                        size: 15,
+                        color: _blue,
+                      ),
+                      const SizedBox(width: 5),
+                      Text(
+                        'Añadir otro cliente',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: _blue,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
         ],
-        // Global rechazado toggle
-        _buildGlobalRechazadoRow(context),
-        // Add button
-        if (widget.canEdit && !_isRechazada)
+        if (myClients.isEmpty && widget.canEdit && !widget.isRechazada) ...[
+          const SizedBox(height: 6),
           GestureDetector(
             onTap: () => _showAddPicker(context),
             behavior: HitTestBehavior.opaque,
@@ -2471,9 +2609,9 @@ class _ClientesTableState extends State<_ClientesTable> {
                     color: _blue,
                   ),
                   const SizedBox(width: 6),
-                  Text(
-                    checked.isEmpty ? 'Añadir cliente' : 'Añadir otro cliente',
-                    style: const TextStyle(
+                  const Text(
+                    'Añadir cliente',
+                    style: TextStyle(
                       fontSize: 13,
                       color: _blue,
                       fontWeight: FontWeight.w600,
@@ -2483,202 +2621,65 @@ class _ClientesTableState extends State<_ClientesTable> {
               ),
             ),
           ),
+        ],
+        if (companeroIds.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          _buildSectionHeader(
+            'COTIZACIONES DE MIS COMPAÑEROS',
+            accent: const Color(0xFF7C3AED),
+            bg: const Color(0xFFF5F3FF),
+            icon: CupertinoIcons.person_2_fill,
+          ),
+          for (final uid in companeroIds) ...[
+            _buildCompaneroHeader(uid, nameFor(uid), byCompanero[uid]!.length),
+            if (_expandedCompaneros.contains(uid))
+              ...byCompanero[uid]!.map(
+                (c) => _buildCard(
+                  c,
+                  readOnly: true,
+                  cardAccent: const Color(0xFF7C3AED),
+                ),
+              ),
+          ],
+        ],
       ],
     );
   }
 
-  Widget _buildGlobalRechazadoRow(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-      decoration: BoxDecoration(
-        color: _isRechazada ? const Color(0xFFFEF2F2) : const Color(0xFFF9FAFB),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: _isRechazada
-              ? const Color(0xFFDC2626).withValues(alpha: 0.4)
-              : const Color(0xFFE5E7EB),
+  Widget _buildSectionHeader(
+    String label, {
+    Color? accent,
+    Color? bg,
+    IconData? icon,
+  }) {
+    if (accent != null && bg != null) {
+      return Container(
+        margin: const EdgeInsets.fromLTRB(12, 2, 12, 6),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(8),
+          border: Border(left: BorderSide(color: accent, width: 3)),
         ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
         child: Row(
           children: [
-            Icon(
-              _isRechazada
-                  ? CupertinoIcons.xmark_circle_fill
-                  : CupertinoIcons.xmark_circle,
-              size: 18,
-              color: _isRechazada ? const Color(0xFFDC2626) : _muted,
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Rechazado',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: _isRechazada ? const Color(0xFFDC2626) : _ink,
-                    ),
-                  ),
-                  Text(
-                    _isRechazada
-                        ? 'El pliego ha sido rechazado'
-                        : 'Marcar el pliego completo como rechazado',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: _isRechazada
-                          ? const Color(0xFFDC2626).withValues(alpha: 0.8)
-                          : _muted,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            if (widget.canEdit)
-              CupertinoSwitch(
-                value: _isRechazada,
-                activeTrackColor: const Color(0xFFDC2626),
-                onChanged: (v) {
-                  if (v) {
-                    _showGlobalRejectionDialog(context);
-                  } else {
-                    setState(() => _isRechazada = false);
-                    widget.onRechazar(false, null);
-                  }
-                },
-              )
-            else if (_isRechazada)
-              const Text(
-                'Sí',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFFDC2626),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _showGlobalRejectionDialog(BuildContext context) async {
-    final textCtrl = TextEditingController();
-    int selectedOption = 0;
-    final result = await showCupertinoDialog<String>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setDialogState) => CupertinoAlertDialog(
-          title: const Text('Motivo de rechazo'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 12),
-              GestureDetector(
-                onTap: () => setDialogState(() => selectedOption = 1),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 10,
-                    horizontal: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: selectedOption == 1 ? const Color(0xFFEFF6FF) : null,
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(
-                      color: selectedOption == 1
-                          ? _blue
-                          : const Color(0xFFE5E7EB),
-                    ),
-                  ),
-                  child: const Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'Ingram no trabaja con este fabricante',
-                          style: TextStyle(fontSize: 13, color: _ink),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              GestureDetector(
-                onTap: () => setDialogState(() => selectedOption = 2),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 10,
-                    horizontal: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: selectedOption == 2 ? const Color(0xFFEFF6FF) : null,
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(
-                      color: selectedOption == 2
-                          ? _blue
-                          : const Color(0xFFE5E7EB),
-                    ),
-                  ),
-                  child: const Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'Otro motivo',
-                          style: TextStyle(fontSize: 13, color: _ink),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              if (selectedOption == 2) ...[
-                const SizedBox(height: 10),
-                CupertinoTextField(
-                  controller: textCtrl,
-                  placeholder: 'Escribe el motivo...',
-                  style: const TextStyle(fontSize: 13),
-                  maxLines: 2,
-                ),
-              ],
+            if (icon != null) ...[
+              Icon(icon, size: 12, color: accent),
+              const SizedBox(width: 6),
             ],
-          ),
-          actions: [
-            CupertinoDialogAction(
-              child: const Text('Cancelar'),
-              onPressed: () => Navigator.pop(ctx),
-            ),
-            CupertinoDialogAction(
-              child: const Text('Confirmar'),
-              isDestructiveAction: true,
-              onPressed: () {
-                if (selectedOption == 1) {
-                  Navigator.pop(
-                    ctx,
-                    'RECHAZADO - Ingram no trabaja con este fabricante',
-                  );
-                } else if (selectedOption == 2) {
-                  final val = textCtrl.text.trim();
-                  Navigator.pop(
-                    ctx,
-                    val.isEmpty ? 'RECHAZADO - Otro' : 'RECHAZADO - Otro: $val',
-                  );
-                }
-              },
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+                color: accent,
+                letterSpacing: 0.8,
+              ),
             ),
           ],
         ),
-      ),
-    );
-    if (result != null) {
-      setState(() => _isRechazada = true);
-      await widget.onRechazar(true, result);
+      );
     }
-  }
-
-  Widget _buildSectionHeader(String label) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 2, 14, 6),
       child: Row(
@@ -2699,7 +2700,55 @@ class _ClientesTableState extends State<_ClientesTable> {
     );
   }
 
-  Widget _buildCard(String cliente) {
+  Widget _buildCompaneroHeader(int? uid, String name, int count) {
+    final expanded = _expandedCompaneros.contains(uid);
+    return GestureDetector(
+      onTap: () => setState(() {
+        if (expanded) {
+          _expandedCompaneros.remove(uid);
+        } else {
+          _expandedCompaneros.add(uid);
+        }
+      }),
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Row(
+          children: [
+            const Icon(CupertinoIcons.person_fill, size: 14, color: _muted),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                name,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: _ink,
+                ),
+              ),
+            ),
+            Text('$count', style: const TextStyle(fontSize: 12, color: _muted)),
+            const SizedBox(width: 6),
+            AnimatedRotation(
+              turns: expanded ? 0.25 : 0,
+              duration: const Duration(milliseconds: 180),
+              child: const Icon(
+                CupertinoIcons.chevron_right,
+                size: 14,
+                color: _muted,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCard(
+    String cliente, {
+    bool readOnly = false,
+    Color? cardAccent,
+  }) {
     final isSaving = _saving.contains(cliente);
     final p = _ctrls[cliente];
     final d = widget.cotizaciones[cliente];
@@ -2710,19 +2759,31 @@ class _ClientesTableState extends State<_ClientesTable> {
         (d?.divisiones.isNotEmpty ?? false) ||
         d?.vaConPliego != null;
     final isLocked =
-        !widget.canEdit || (hasSaved && !_editing.contains(cliente));
+        readOnly ||
+        !widget.canEdit ||
+        (hasSaved && !_editing.contains(cliente));
     final currentEstado = _estado[cliente];
     final isRechazado =
         currentEstado != null && currentEstado.startsWith('RECHAZADO');
     final accentColor = isRechazado
         ? const Color(0xFFDC2626)
-        : const Color(0xFFCBD5E1);
+        : (cardAccent ?? const Color(0xFFCBD5E1));
+    final cardBg = isRechazado
+        ? const Color(0xFFFFFAFA)
+        : (cardAccent != null
+              ? cardAccent.withValues(alpha: 0.04)
+              : const Color(0xFFFFFFFF));
+    final borderColor = isRechazado
+        ? const Color(0xFFDC2626).withValues(alpha: 0.2)
+        : (cardAccent != null
+              ? cardAccent.withValues(alpha: 0.18)
+              : const Color(0xFFE5E7EB));
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 0, 12, 10),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFFFFF),
+        color: cardBg,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        border: Border.all(color: borderColor),
         boxShadow: const [
           BoxShadow(
             color: Color(0x0A000000),
@@ -2813,28 +2874,65 @@ class _ClientesTableState extends State<_ClientesTable> {
                       const SizedBox(height: 4),
                       _buildDivisionChips(cliente, isLocked),
                       const SizedBox(height: 6),
-                      // Row 3: va con pliego
-                      _buildVaConPliegoToggle(cliente, isLocked),
-                      const SizedBox(height: 6),
-                      // Oportunidad + Cotización XV as link-button fields
+                      // Oportunidad row: ID first, then link button
                       if (p != null) ...[
-                        _XvLinkField(
-                          label: 'Oportunidad',
-                          controller: p.$2,
-                          isLocked: isLocked,
-                          onSubmitted: () => _save(cliente),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Expanded(
+                              child: _XvLinkField(
+                                label: 'ID de la Oportunidad',
+                                controller: p.$4,
+                                isLocked: isLocked,
+                                onSubmitted: () => _save(cliente),
+                                placeholder: 'OPP-061715220929-42C2E',
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: _XvLinkField(
+                                label: 'Oportunidad',
+                                controller: p.$2,
+                                isLocked: isLocked,
+                                onSubmitted: () => _save(cliente),
+                                buttonLabel: 'Ver Oportunidad en XVantage',
+                              ),
+                            ),
+                          ],
                         ),
                         const SizedBox(height: 6),
-                        _XvLinkField(
-                          label: 'Cotización XV',
-                          controller: p.$1,
-                          isLocked: isLocked,
-                          onSubmitted: () => _save(cliente),
+                        // Cotización row: ID first, then link button
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Expanded(
+                              child: _XvLinkField(
+                                label: 'ID de la Cotización',
+                                controller: p.$3,
+                                isLocked: isLocked,
+                                onSubmitted: () => _save(cliente),
+                                placeholder: 'QUO-5246560-N3F6R9',
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: _XvLinkField(
+                                label: 'Cotización XV',
+                                controller: p.$1,
+                                isLocked: isLocked,
+                                onSubmitted: () => _save(cliente),
+                                buttonLabel: 'Ver Cotización en XVantage',
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                       const SizedBox(height: 8),
                       // Protección Fabricante per-client
                       _buildFabricante(cliente, isLocked),
+                      const SizedBox(height: 6),
+                      // ¿El cliente finalmente se presenta?
+                      _buildVaConPliegoToggle(cliente, isLocked),
                     ],
                   ),
                 ),
@@ -2874,7 +2972,11 @@ class _ClientesTableState extends State<_ClientesTable> {
               const Expanded(
                 child: Text(
                   'Protección Fabricante',
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _ink),
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: _ink,
+                  ),
                 ),
               ),
               if (isLocked)
@@ -2890,7 +2992,8 @@ class _ClientesTableState extends State<_ClientesTable> {
                 CupertinoSwitch(
                   value: isProtected,
                   activeTrackColor: const Color(0xFFE11D48),
-                  onChanged: (v) => setState(() => _fabricanteProteccion[cliente] = v),
+                  onChanged: (v) =>
+                      setState(() => _fabricanteProteccion[cliente] = v),
                 ),
             ],
           ),
@@ -2905,7 +3008,9 @@ class _ClientesTableState extends State<_ClientesTable> {
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
               decoration: BoxDecoration(
                 color: isLocked ? const Color(0xFFF3F4F6) : _white,
-                border: Border.all(color: isLocked ? const Color(0xFFE5E7EB) : _border),
+                border: Border.all(
+                  color: isLocked ? const Color(0xFFE5E7EB) : _border,
+                ),
                 borderRadius: BorderRadius.circular(6),
               ),
               onSubmitted: (_) => _save(cliente),
@@ -2924,56 +3029,121 @@ class _XvLinkField extends StatelessWidget {
   final TextEditingController controller;
   final bool isLocked;
   final VoidCallback onSubmitted;
+  final String? placeholder;
+  final String? buttonLabel;
 
   const _XvLinkField({
     required this.label,
     required this.controller,
     required this.isLocked,
     required this.onSubmitted,
+    this.placeholder,
+    this.buttonLabel,
   });
 
   @override
   Widget build(BuildContext context) {
-    final hasValue = controller.text.trim().isNotEmpty;
+    final value = controller.text.trim();
+    final hasValue = value.isNotEmpty;
+    final isLink =
+        hasValue &&
+        (value.startsWith('http://') || value.startsWith('https://'));
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           label,
-          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: _muted),
+          style: const TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            color: _muted,
+          ),
         ),
         const SizedBox(height: 3),
-        Row(
-          children: [
-            Expanded(
-              child: CupertinoTextField(
-                controller: controller,
-                placeholder: 'Pegar enlace de XVantage...',
-                readOnly: isLocked,
-                style: TextStyle(fontSize: 12, color: isLocked ? _muted : _ink),
-                placeholderStyle: const TextStyle(fontSize: 12, color: _muted),
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                decoration: BoxDecoration(
-                  color: isLocked ? const Color(0xFFF3F4F6) : _white,
-                  border: Border.all(color: isLocked ? const Color(0xFFE5E7EB) : _border),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                onSubmitted: (_) => onSubmitted(),
+        // Locked + has a URL → show as a labelled action button
+        if (isLocked && isLink)
+          GestureDetector(
+            onTap: () => launchUrl(
+              Uri.parse(value),
+              mode: LaunchMode.externalApplication,
+            ),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: _blue,
+                borderRadius: BorderRadius.circular(7),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(
+                    CupertinoIcons.arrow_up_right_square,
+                    size: 13,
+                    color: Color(0xFFFFFFFF),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    buttonLabel ?? 'Ver ${label.toLowerCase()}',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFFFFFFFF),
+                    ),
+                  ),
+                ],
               ),
             ),
-            if (hasValue) ...[
-              const SizedBox(width: 4),
-              CupertinoButton(
-                padding: EdgeInsets.zero,
-                minimumSize: Size.zero,
-                onPressed: () async {
-                  await Clipboard.setData(ClipboardData(text: controller.text.trim()));
-                },
-                child: const Icon(CupertinoIcons.doc_on_doc, size: 16, color: _blue),
+          )
+        // Locked + plain text (IDs) or editing mode → standard text field + copy
+        else
+          Row(
+            children: [
+              Expanded(
+                child: CupertinoTextField(
+                  controller: controller,
+                  placeholder: placeholder ?? 'Pegar enlace de XVantage...',
+                  readOnly: isLocked,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isLocked ? _muted : _ink,
+                  ),
+                  placeholderStyle: const TextStyle(
+                    fontSize: 12,
+                    color: _muted,
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: isLocked ? const Color(0xFFF3F4F6) : _white,
+                    border: Border.all(
+                      color: isLocked ? const Color(0xFFE5E7EB) : _border,
+                    ),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  onSubmitted: (_) => onSubmitted(),
+                ),
               ),
+              if (hasValue) ...[
+                const SizedBox(width: 4),
+                CupertinoButton(
+                  padding: EdgeInsets.zero,
+                  minimumSize: Size.zero,
+                  onPressed: () async {
+                    await Clipboard.setData(ClipboardData(text: value));
+                  },
+                  child: const Icon(
+                    CupertinoIcons.doc_on_doc,
+                    size: 16,
+                    color: _blue,
+                  ),
+                ),
+              ],
             ],
-          ],
-        ),
+          ),
       ],
     );
   }
@@ -3678,72 +3848,51 @@ class _LitiSummaryState extends State<_LitiSummary> {
     _loadSummary();
   }
 
-  String _buildPrompt() {
-    final l = widget.lic;
-    final parts = [
-      'Licitación: ${l.titulo}',
-      'Expediente: ${l.numeroExpediente}',
-      if (l.organismoNombre != null) 'Organismo: ${l.organismoNombre}',
-      if (l.importeLicitacion != null) 'Importe: €${_fmtEurFull(l.importeLicitacion!)} (sin IVA)',
-      if (l.fechaLimiteOferta != null) 'Fecha límite: ${l.fechaLimiteOferta}',
-      if (l.comunidadAutonoma != null) 'CCAA: ${l.comunidadAutonoma}',
-      if (l.mercadoVertical != null) 'Mercado: ${l.mercadoVertical}',
-      if (l.tipoProcedimiento != null) 'Procedimiento: ${l.tipoProcedimiento}',
-      if (l.tipoTramitacion != null) 'Tramitación: ${l.tipoTramitacion}',
-      if (l.duracionMeses != null) 'Duración: ${l.duracionMeses} meses',
-    ];
-    return 'Analiza en detalle esta licitación incluyendo todos los documentos adjuntos (pliegos, anexos, etc.). '
-        'Estructura tu respuesta así:\n\n'
-        '**Resumen ejecutivo**\n'
-        '(2-3 frases: qué se licita, quién puede presentarse, cuánto vale)\n\n'
-        '**Requisitos técnicos clave**\n'
-        '(extrae del pliego los puntos más importantes: qué tiene que ofrecer el proveedor)\n\n'
-        '**Puntos de atención**\n'
-        '(plazos, solvencia exigida, criterios de valoración, condiciones especiales)\n\n'
-        '**Encaje para Ingram Micro**\n'
-        '(¿qué divisiones/productos encajan? ¿vale la pena presentarse?)\n\n'
-        'Datos de la licitación:\n${parts.join('\n')}';
-  }
-
   Future<void> _loadSummary({bool forceRefresh = false}) async {
     if (!mounted) return;
-    setState(() { _loading = true; _error = null; _text = ''; _sessionId = null; });
+    setState(() {
+      _loading = true;
+      _error = null;
+      _text = '';
+      _sessionId = null;
+    });
     try {
       // Try cache first (unless the user explicitly asked for a refresh)
       if (!forceRefresh) {
         final cached = await _api.getLicitacionSummary(widget.lic.id);
         if (cached != null && cached.isNotEmpty) {
-          if (mounted) setState(() { _text = cached; _loading = false; });
+          if (mounted)
+            setState(() {
+              _text = cached;
+              _loading = false;
+            });
           return;
         }
       }
 
-      // Stream from AI
+      // Stream from the dedicated Haiku summarize Lambda (auto-saves on completion)
       await _api
-          .chatStream(message: _buildPrompt(), licitacionId: widget.lic.id)
+          .summarizeStream(widget.lic.id)
           .timeout(
-            const Duration(seconds: 110),
+            const Duration(seconds: 90),
             onTimeout: (sink) => sink.close(),
           )
           .forEach((event) {
-        if (!mounted) return;
-        if (event.containsKey('session_id')) {
-          _sessionId = event['session_id'] as String?;
-        } else if (event.containsKey('token')) {
-          setState(() => _text += (event['token'] as String? ?? ''));
-        } else if (event.containsKey('error')) {
-          setState(() => _error = event['error'] as String?);
-        }
-      });
+            if (!mounted) return;
+            if (event.containsKey('token')) {
+              setState(() => _text += (event['token'] as String? ?? ''));
+            } else if (event.containsKey('error')) {
+              setState(() => _error = event['error'] as String?);
+            }
+          });
       if (mounted && _text.isEmpty && _error == null) {
-        setState(() => _error = 'Sin respuesta del servidor. Pulsa ↺ para reintentar.');
-      }
-      // Save to DB so the next person gets it instantly
-      if (_text.isNotEmpty) {
-        _api.saveLicitacionSummary(widget.lic.id, _text).ignore();
+        setState(
+          () => _error = 'Sin respuesta del servidor. Pulsa ↺ para reintentar.',
+        );
       }
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString().replaceAll('Exception: ', ''));
+      if (mounted)
+        setState(() => _error = e.toString().replaceAll('Exception: ', ''));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -3774,7 +3923,9 @@ class _LitiSummaryState extends State<_LitiSummary> {
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF7C3AED).withValues(alpha: 0.2)),
+        border: Border.all(
+          color: const Color(0xFF7C3AED).withValues(alpha: 0.2),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -3783,7 +3934,8 @@ class _LitiSummaryState extends State<_LitiSummary> {
           Row(
             children: [
               Container(
-                width: 26, height: 26,
+                width: 26,
+                height: 26,
                 decoration: BoxDecoration(
                   gradient: const LinearGradient(
                     colors: [Color(0xFF6D28D9), Color(0xFF4F46E5)],
@@ -3792,21 +3944,36 @@ class _LitiSummaryState extends State<_LitiSummary> {
                   ),
                   borderRadius: BorderRadius.circular(7),
                 ),
-                child: const Icon(CupertinoIcons.sparkles, size: 12, color: Color(0xFFFFFFFF)),
+                child: const Icon(
+                  CupertinoIcons.sparkles,
+                  size: 12,
+                  color: Color(0xFFFFFFFF),
+                ),
               ),
               const SizedBox(width: 8),
               const Expanded(
                 child: Text(
                   'Resumen Liti',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF4C1D95)),
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF4C1D95),
+                  ),
                 ),
               ),
               if (_loading)
-                const CupertinoActivityIndicator(radius: 6, color: Color(0xFF7C3AED))
+                const CupertinoActivityIndicator(
+                  radius: 6,
+                  color: Color(0xFF7C3AED),
+                )
               else
                 GestureDetector(
                   onTap: () => _loadSummary(forceRefresh: true),
-                  child: const Icon(CupertinoIcons.refresh, size: 13, color: Color(0xFF7C3AED)),
+                  child: const Icon(
+                    CupertinoIcons.refresh,
+                    size: 13,
+                    color: Color(0xFF7C3AED),
+                  ),
                 ),
             ],
           ),
@@ -3836,11 +4003,19 @@ class _LitiSummaryState extends State<_LitiSummary> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: const [
-                  Icon(CupertinoIcons.chat_bubble_text, size: 12, color: Color(0xFF7C3AED)),
+                  Icon(
+                    CupertinoIcons.chat_bubble_text,
+                    size: 12,
+                    color: Color(0xFF7C3AED),
+                  ),
                   SizedBox(width: 5),
                   Text(
                     'Preguntar a Liti',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF7C3AED)),
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF7C3AED),
+                    ),
                   ),
                 ],
               ),
@@ -3902,16 +4077,34 @@ class _MarkdownPreview extends StatelessWidget {
   });
 
   static final _sheet = MarkdownStyleSheet(
-    p:      const TextStyle(fontSize: 12.5, color: _ink, height: 1.6),
-    h1:     const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _navy),
-    h2:     const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _navy),
-    h3:     const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: _navy),
-    strong: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: _ink),
+    p: const TextStyle(fontSize: 12.5, color: _ink, height: 1.6),
+    h1: const TextStyle(
+      fontSize: 13,
+      fontWeight: FontWeight.w700,
+      color: _navy,
+    ),
+    h2: const TextStyle(
+      fontSize: 13,
+      fontWeight: FontWeight.w700,
+      color: _navy,
+    ),
+    h3: const TextStyle(
+      fontSize: 12.5,
+      fontWeight: FontWeight.w700,
+      color: _navy,
+    ),
+    strong: const TextStyle(
+      fontSize: 12.5,
+      fontWeight: FontWeight.w700,
+      color: _ink,
+    ),
     listBullet: const TextStyle(fontSize: 12.5, color: Color(0xFF6D28D9)),
     blockquotePadding: const EdgeInsets.fromLTRB(10, 4, 10, 4),
     blockquoteDecoration: BoxDecoration(
       color: const Color(0xFFF3F0FF),
-      border: const Border(left: BorderSide(color: Color(0xFF7C3AED), width: 3)),
+      border: const Border(
+        left: BorderSide(color: Color(0xFF7C3AED), width: 3),
+      ),
       borderRadius: BorderRadius.circular(2),
     ),
   );
@@ -3968,11 +4161,17 @@ class _MarkdownPreview extends StatelessWidget {
               children: [
                 Text(
                   expanded ? 'Ver menos' : 'Ver resumen completo',
-                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF7C3AED)),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF7C3AED),
+                  ),
                 ),
                 const SizedBox(width: 3),
                 Icon(
-                  expanded ? CupertinoIcons.chevron_up : CupertinoIcons.chevron_down,
+                  expanded
+                      ? CupertinoIcons.chevron_up
+                      : CupertinoIcons.chevron_down,
                   size: 11,
                   color: const Color(0xFF7C3AED),
                 ),
@@ -3982,5 +4181,234 @@ class _MarkdownPreview extends StatelessWidget {
         ],
       ],
     );
+  }
+}
+
+class _RechazadoSection extends StatefulWidget {
+  final bool isRechazada;
+  final bool canEdit;
+  final Future<void> Function(bool rechazada, String? motivo) onRechazar;
+
+  const _RechazadoSection({
+    required this.isRechazada,
+    required this.canEdit,
+    required this.onRechazar,
+  });
+
+  @override
+  State<_RechazadoSection> createState() => _RechazadoSectionState();
+}
+
+class _RechazadoSectionState extends State<_RechazadoSection> {
+  late bool _isRechazada;
+
+  @override
+  void initState() {
+    super.initState();
+    _isRechazada = widget.isRechazada;
+  }
+
+  @override
+  void didUpdateWidget(_RechazadoSection old) {
+    super.didUpdateWidget(old);
+    if (old.isRechazada != widget.isRechazada) {
+      _isRechazada = widget.isRechazada;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: Container(
+        decoration: BoxDecoration(
+          color: _isRechazada
+              ? const Color(0xFFFEF2F2)
+              : const Color(0xFFF9FAFB),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: _isRechazada
+                ? const Color(0xFFDC2626).withValues(alpha: 0.4)
+                : const Color(0xFFE5E7EB),
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            children: [
+              Icon(
+                _isRechazada
+                    ? CupertinoIcons.xmark_circle_fill
+                    : CupertinoIcons.xmark_circle,
+                size: 18,
+                color: _isRechazada ? const Color(0xFFDC2626) : _muted,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Rechazado',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: _isRechazada ? const Color(0xFFDC2626) : _ink,
+                      ),
+                    ),
+                    Text(
+                      _isRechazada
+                          ? 'El pliego ha sido rechazado'
+                          : 'Marcar el pliego completo como rechazado',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: _isRechazada
+                            ? const Color(0xFFDC2626).withValues(alpha: 0.8)
+                            : _muted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (widget.canEdit)
+                CupertinoSwitch(
+                  value: _isRechazada,
+                  activeTrackColor: const Color(0xFFDC2626),
+                  onChanged: (v) {
+                    if (v) {
+                      _showRejectionDialog(context);
+                    } else {
+                      setState(() => _isRechazada = false);
+                      widget.onRechazar(false, null);
+                    }
+                  },
+                )
+              else if (_isRechazada)
+                const Text(
+                  'Sí',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFFDC2626),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showRejectionDialog(BuildContext context) async {
+    final textCtrl = TextEditingController();
+    int selectedOption = 0;
+    final result = await showCupertinoDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => CupertinoAlertDialog(
+          title: const Text('Motivo de rechazo'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 12),
+              GestureDetector(
+                onTap: () => setDialogState(() => selectedOption = 1),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 10,
+                    horizontal: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: selectedOption == 1 ? const Color(0xFFEFF6FF) : null,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: selectedOption == 1
+                          ? _blue
+                          : const Color(0xFFE5E7EB),
+                    ),
+                  ),
+                  child: const Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Ingram no trabaja con este fabricante',
+                          style: TextStyle(fontSize: 13, color: _ink),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              GestureDetector(
+                onTap: () => setDialogState(() => selectedOption = 2),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 10,
+                    horizontal: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: selectedOption == 2 ? const Color(0xFFEFF6FF) : null,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: selectedOption == 2
+                          ? _blue
+                          : const Color(0xFFE5E7EB),
+                    ),
+                  ),
+                  child: const Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Otro motivo',
+                          style: TextStyle(fontSize: 13, color: _ink),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              if (selectedOption == 2) ...[
+                const SizedBox(height: 10),
+                CupertinoTextField(
+                  controller: textCtrl,
+                  placeholder: 'Escribe el motivo...',
+                  style: const TextStyle(fontSize: 13),
+                  maxLines: 2,
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            CupertinoDialogAction(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancelar'),
+            ),
+            CupertinoDialogAction(
+              isDestructiveAction: true,
+              onPressed: () {
+                if (selectedOption == 1) {
+                  Navigator.pop(
+                    ctx,
+                    'RECHAZADO - Ingram no trabaja con este fabricante',
+                  );
+                } else if (selectedOption == 2) {
+                  final val = textCtrl.text.trim();
+                  Navigator.pop(
+                    ctx,
+                    val.isEmpty ? 'RECHAZADO - Otro' : 'RECHAZADO - Otro: $val',
+                  );
+                }
+              },
+              child: const Text('Confirmar'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (result != null) {
+      setState(() => _isRechazada = true);
+      await widget.onRechazar(true, result);
+    }
   }
 }

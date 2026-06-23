@@ -1,6 +1,7 @@
 import 'package:flutter/cupertino.dart';
 import '../services/auth_service.dart';
 import '../services/update_service.dart';
+import '../widgets/liti_chat_overlay.dart';
 import 'login_screen.dart';
 import '../main.dart';
 
@@ -135,6 +136,12 @@ class _SplashScreenState extends State<SplashScreen>
     Navigator.of(context).pushReplacement(
       _fadeRoute(isLoggedIn ? const AppShell() : const LoginScreen()),
     );
+    if (isLoggedIn) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        litiChat.authChanged();
+        litiChat.restoreSession();
+      });
+    }
   }
 
   void _setStatus(String s) {

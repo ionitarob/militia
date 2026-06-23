@@ -1,16 +1,31 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../api/client.dart';
 import '../api/models.dart';
 import '../screens/chat_screen.dart';
+import '../services/auth_service.dart';
 
 // ── Global controller ─────────────────────────────────────────────────────────
 
 class LitiChatController extends ChangeNotifier {
+  static const _keySessionId = 'liti_chat_session_id';
+  final _storage = const FlutterSecureStorage();
+
   bool _isOpen = false;
   bool get isOpen => _isOpen;
 
-  String? sessionId;
+  String? _sessionId;
+  String? get sessionId => _sessionId;
+  set sessionId(String? v) {
+    _sessionId = v;
+    if (v != null) {
+      _storage.write(key: _keySessionId, value: v);
+    } else {
+      _storage.delete(key: _keySessionId);
+    }
+  }
+
   final List<ChatMessage> messages = [];
   bool loading = false;
   String? contextTitle;
@@ -22,9 +37,10 @@ class LitiChatController extends ChangeNotifier {
 
   final _api = ApiClient();
 
-  void open()   { _isOpen = true;  notifyListeners(); }
-  void close()  { _isOpen = false; notifyListeners(); }
-  void toggle() { _isOpen = !_isOpen; notifyListeners(); }
+  void open()        { _isOpen = true;  notifyListeners(); }
+  void close()       { _isOpen = false; notifyListeners(); }
+  void toggle()      { _isOpen = !_isOpen; notifyListeners(); }
+  void authChanged() { notifyListeners(); }
 
   /// Called by each screen so Liti always knows what the user is looking at.
   /// If the licitacion changes mid-session, a context update is silently injected
@@ -45,8 +61,26 @@ class LitiChatController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Restores the last session ID from secure storage and loads its messages.
+  /// Call once at app startup after auth is confirmed.
+  Future<void> restoreSession() async {
+    final saved = await _storage.read(key: _keySessionId);
+    if (saved == null || saved.isEmpty) return;
+    try {
+      final detail = await _api.getChatSession(saved);
+      if (detail.messages.isNotEmpty) {
+        _sessionId = saved;
+        messages.addAll(detail.messages);
+        notifyListeners();
+      }
+    } catch (_) {
+      // Session no longer exists — discard it
+      await _storage.delete(key: _keySessionId);
+    }
+  }
+
   void newSession() {
-    sessionId = null;
+    sessionId = null;  // also clears persisted key via setter
     messages.clear();
     contextTitle = null;
     loading = false;
@@ -141,7 +175,9 @@ class LitiChatOverlay extends StatelessWidget {
       right: 20,
       child: ListenableBuilder(
         listenable: litiChat,
-        builder: (ctx, _) => AnimatedSwitcher(
+        builder: (ctx, _) {
+          if (AuthService().currentUser == null) return const SizedBox.shrink();
+          return AnimatedSwitcher(
           duration: const Duration(milliseconds: 220),
           transitionBuilder: (child, anim) => FadeTransition(
             opacity: anim,
@@ -156,7 +192,8 @@ class LitiChatOverlay extends StatelessWidget {
           child: litiChat.isOpen
               ? const _ChatPanel(key: ValueKey('panel'))
               : const _ChatFab(key: ValueKey('fab')),
-        ),
+          );
+        },
       ),
     );
   }
