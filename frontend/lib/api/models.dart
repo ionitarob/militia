@@ -89,6 +89,7 @@ class Adjudicacion {
   final String? adjudicatarioNombre;
   final int? licitacionId;
   final String? cpvLabel;
+  final List<ClienteCotizacion> cotizaciones;
   final String createdAt;
 
   const Adjudicacion({
@@ -117,6 +118,7 @@ class Adjudicacion {
     this.adjudicatarioNombre,
     this.licitacionId,
     this.cpvLabel,
+    this.cotizaciones = const [],
     required this.createdAt,
   });
 
@@ -146,7 +148,42 @@ class Adjudicacion {
     adjudicatarioNombre:       j['adjudicatario_nombre'] as String?,
     licitacionId:              j['licitacion_id'] as int?,
     cpvLabel:                  j['cpv_label'] as String?,
+    cotizaciones:              (j['cotizaciones'] as List<dynamic>?)
+                                   ?.map((e) => ClienteCotizacion.fromJson(e as Map<String, dynamic>))
+                                   .toList() ?? [],
     createdAt:                 j['created_at'] as String? ?? '',
+  );
+}
+
+// ── Alerta ────────────────────────────────────────────────────────────────────
+
+class Alerta {
+  final int id;
+  final int adjudicacionId;
+  final int? licitacionId;
+  final String mensaje;
+  final bool leida;
+  final String createdAt;
+  final String adjTitulo;
+
+  const Alerta({
+    required this.id,
+    required this.adjudicacionId,
+    this.licitacionId,
+    required this.mensaje,
+    required this.leida,
+    required this.createdAt,
+    required this.adjTitulo,
+  });
+
+  factory Alerta.fromJson(Map<String, dynamic> j) => Alerta(
+    id:             j['id'] as int,
+    adjudicacionId: j['adjudicacion_id'] as int,
+    licitacionId:   j['licitacion_id'] as int?,
+    mensaje:        j['mensaje'] as String,
+    leida:          j['leida'] as bool,
+    createdAt:      j['created_at'] as String,
+    adjTitulo:      j['adj_titulo'] as String? ?? '',
   );
 }
 

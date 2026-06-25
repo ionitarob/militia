@@ -339,6 +339,24 @@ def upsert_adjudicacion(cur, rec: dict) -> Optional[int]:
     )
     adjudicacion_id = row[0] if row else None
 
+    # Send in-app alerts to comerciales who worked on the linked licitacion
+    if adjudicacion_id and licitacion_id:
+        cur.execute(
+            """SELECT DISTINCT user_id FROM licitacion_cotizacion
+               WHERE licitacion_id = %s AND user_id IS NOT NULL""",
+            (licitacion_id,),
+        )
+        comercial_ids = [row[0] for row in cur.fetchall()]
+        titulo = rec.get("titulo", "Adjudicación")
+        for uid in comercial_ids:
+            cur.execute(
+                """INSERT INTO alerta (user_id, adjudicacion_id, licitacion_id, mensaje)
+                   VALUES (%s, %s, %s, %s)
+                   ON CONFLICT (user_id, adjudicacion_id) DO NOTHING""",
+                (uid, adjudicacion_id, licitacion_id,
+                 f"El pliego «{titulo}» que trabajaste ha sido adjudicado."),
+            )
+
     # Write CPV codes
     cpv_codes = rec.get("cpv_codes") or []
     if adjudicacion_id and cpv_codes:

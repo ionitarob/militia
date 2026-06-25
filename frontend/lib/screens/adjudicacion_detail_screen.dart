@@ -3,6 +3,9 @@ import 'package:url_launcher/url_launcher.dart';
 import '../api/client.dart';
 import '../api/models.dart';
 
+const _teal = Color(0xFF0D9488);
+const _gold = Color(0xFFF59E0B);
+
 const _purple = Color(0xFF7C3AED);
 const _navy   = Color(0xFF1E1B4B);
 const _ink    = Color(0xFF111827);
@@ -293,6 +296,12 @@ class _AdjudicacionDetailScreenState extends State<AdjudicacionDetailScreen> {
                       const SizedBox(height: 10),
                     ],
 
+                    // ── Datos comerciales (cotizaciones de la licitación) ─
+                    if (_adj.cotizaciones.isNotEmpty) ...[
+                      _DatosComerciales(cotizaciones: _adj.cotizaciones),
+                      const SizedBox(height: 10),
+                    ],
+
                     // ── Licitación relacionada ───────────────────────────
                     if (_adj.licitacionId != null) ...[
                       _RelatedLicitacion(licitacionId: _adj.licitacionId!),
@@ -407,6 +416,219 @@ class _PortalLinkCard extends StatelessWidget {
       ),
     );
   }
+}
+
+// ── Datos Comerciales ─────────────────────────────────────────────────────────
+
+class _DatosComerciales extends StatelessWidget {
+  final List<ClienteCotizacion> cotizaciones;
+  const _DatosComerciales({required this.cotizaciones});
+
+  String _estadoLabel(String? e) {
+    if (e == null) return '—';
+    const map = {
+      'nueva': 'Sin gestionar',
+      'asignada': 'Asignada',
+      'cotizacion_solicitada': 'Cotización solicitada',
+      'cotizaciones_enviadas': 'Cotización enviada',
+      'ganada': 'Ganada',
+      'perdida': 'Perdida',
+      'desierta': 'Desierta',
+    };
+    return map[e] ?? e;
+  }
+
+  Color _estadoColor(String? e) {
+    switch (e) {
+      case 'ganada': return _teal;
+      case 'perdida':
+      case 'desierta': return const Color(0xFFDC2626);
+      case 'cotizaciones_enviadas': return const Color(0xFF2563EB);
+      default: return _muted;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: _white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _border),
+        boxShadow: [
+          BoxShadow(color: _navy.withValues(alpha: 0.05), blurRadius: 10, offset: const Offset(0, 2)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Row(
+              children: [
+                Container(
+                  width: 22, height: 22,
+                  decoration: BoxDecoration(
+                    color: _gold.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(5),
+                  ),
+                  child: const Icon(CupertinoIcons.briefcase_fill, size: 11, color: _gold),
+                ),
+                const SizedBox(width: 8),
+                const Text(
+                  'DATOS COMERCIALES',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: _muted,
+                    letterSpacing: 0.6,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 4),
+          ...cotizaciones.asMap().entries.map((entry) {
+            final i = entry.key;
+            final c = entry.value;
+            final isLast = i == cotizaciones.length - 1;
+            return Column(
+              children: [
+                Container(height: 1, color: _border),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Client name + estado badge
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              c.clienteNombre,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: _ink,
+                              ),
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: _estadoColor(c.estado).withValues(alpha: 0.10),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              _estadoLabel(c.estado),
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                                color: _estadoColor(c.estado),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      // Extra flags
+                      if (c.sePresenta || c.vaConPliego == true || c.fabricanteProteccion) ...[
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 4,
+                          children: [
+                            if (c.sePresenta)
+                              _Flag(label: 'Se presenta', color: _teal),
+                            if (c.vaConPliego == true)
+                              _Flag(label: 'Va con pliego', color: const Color(0xFF2563EB)),
+                            if (c.fabricanteProteccion)
+                              _Flag(
+                                label: c.fabricanteNombre != null
+                                    ? 'Fab. ${c.fabricanteNombre}'
+                                    : 'Protección fabricante',
+                                color: _gold,
+                              ),
+                          ],
+                        ),
+                      ],
+                      // Divisiones
+                      if (c.divisiones.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          c.divisiones.join(' · '),
+                          style: const TextStyle(fontSize: 11, color: _muted),
+                        ),
+                      ],
+                      // Oportunidad / cotizacion IDs
+                      if (c.oportunidadId != null || c.cotizacionId != null) ...[
+                        const SizedBox(height: 8),
+                        if (c.oportunidadId != null)
+                          _IdRow(label: 'Oportunidad', value: c.oportunidadId!, link: c.oportunidad),
+                        if (c.cotizacionId != null)
+                          _IdRow(label: 'Cotización XV', value: c.cotizacionId!, link: c.cotizacionXv),
+                      ],
+                    ],
+                  ),
+                ),
+                if (isLast) const SizedBox(height: 4),
+              ],
+            );
+          }),
+        ],
+      ),
+    );
+  }
+}
+
+class _Flag extends StatelessWidget {
+  final String label;
+  final Color color;
+  const _Flag({required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+    decoration: BoxDecoration(
+      color: color.withValues(alpha: 0.10),
+      borderRadius: BorderRadius.circular(5),
+    ),
+    child: Text(
+      label,
+      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: color),
+    ),
+  );
+}
+
+class _IdRow extends StatelessWidget {
+  final String label;
+  final String value;
+  final String? link;
+  const _IdRow({required this.label, required this.value, this.link});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 4),
+    child: Row(
+      children: [
+        Text('$label: ', style: const TextStyle(fontSize: 11, color: _muted)),
+        Expanded(
+          child: Text(
+            value,
+            style: const TextStyle(fontSize: 11, color: _ink, fontFamily: 'monospace'),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        if (link != null)
+          CupertinoButton(
+            padding: EdgeInsets.zero,
+            minimumSize: Size.zero,
+            onPressed: () => launchUrl(Uri.parse(link!), mode: LaunchMode.externalApplication),
+            child: const Icon(CupertinoIcons.arrow_up_right_square, size: 14, color: _purple),
+          ),
+      ],
+    ),
+  );
 }
 
 // ── Shared widgets ────────────────────────────────────────────────────────────

@@ -141,6 +141,12 @@ pub async fn handle(state: Arc<AppState>, event: Request) -> Result<Response<Bod
             }
         }
 
+        (Method::PATCH, ["me", "alertas", id, "leer"]) => {
+            if let Ok(alerta_id) = id.parse::<i64>() {
+                return routes::adjudicaciones::marcar_alerta_leida(state, event, alerta_id).await;
+            }
+        }
+
         (Method::GET, ["licitaciones", id, "summary"]) => {
             if let Ok(lid) = id.parse::<i64>() {
                 return routes::licitaciones::get_summary(state, event, lid).await;
@@ -211,7 +217,10 @@ pub async fn handle(state: Arc<AppState>, event: Request) -> Result<Response<Bod
         (Method::GET,  "/teams")             => routes::teams::list(state, event).await,
         (Method::POST, "/teams")             => routes::teams::create(state, event).await,
         (Method::GET,  "/dashboard/stats")   => routes::pipeline::dashboard_stats(state, event).await,
-        (Method::GET,  "/adjudicaciones")    => routes::adjudicaciones::list(state, event).await,
+        (Method::GET,  "/adjudicaciones")         => routes::adjudicaciones::list(state, event).await,
+        (Method::GET,  "/me/adjudicaciones")      => routes::adjudicaciones::me_adjudicaciones(state, event).await,
+        (Method::GET,  "/me/alertas")             => routes::adjudicaciones::me_alertas(state, event).await,
+        (Method::PATCH, "/me/alertas/leer-todas") => routes::adjudicaciones::marcar_todas_alertas_leidas(state, event).await,
         (Method::POST, "/chat")              => routes::chat::send(state, event).await,
         (Method::GET,  "/chat/sessions")     => routes::chat::list_sessions(state, event).await,
         (Method::GET,  "/licitaciones/mine") => routes::pipeline::my_licitaciones(state, event).await,

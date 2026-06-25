@@ -237,6 +237,7 @@ WHERE TRUE
   AND ($18::TEXT IS NULL OR EXISTS (
         SELECT 1 FROM licitacion_assignment la
         WHERE la.licitacion_id = l.id AND la.assignee_id = ANY(string_to_array($18, ',')::INTEGER[]) AND la.active = TRUE))
+  AND NOT EXISTS (SELECT 1 FROM adjudicacion WHERE licitacion_id = l.id)
 ORDER BY {order_by}
 LIMIT $1 OFFSET $2
 "#)
@@ -301,6 +302,7 @@ WHERE TRUE
   AND ($16::TEXT IS NULL OR EXISTS (
         SELECT 1 FROM licitacion_assignment la
         WHERE la.licitacion_id = l.id AND la.assignee_id = ANY(string_to_array($16, ',')::INTEGER[]) AND la.active = TRUE))
+  AND NOT EXISTS (SELECT 1 FROM adjudicacion WHERE licitacion_id = l.id)
 "#;
 
 // ── GET /licitaciones ─────────────────────────────────────────────────────────

@@ -71,6 +71,44 @@ class ApiClient {
     return Adjudicacion.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
   }
 
+  Future<List<Adjudicacion>> getMyAdjudicaciones() async {
+    final res = await _http.get(
+      Uri.parse('$_base/me/adjudicaciones'),
+      headers: await _headers(),
+    );
+    _check(res);
+    return (jsonDecode(res.body) as List)
+        .map((e) => Adjudicacion.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<List<Alerta>> getMyAlertas() async {
+    final res = await _http.get(
+      Uri.parse('$_base/me/alertas'),
+      headers: await _headers(),
+    );
+    _check(res);
+    return (jsonDecode(res.body) as List)
+        .map((e) => Alerta.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> marcarAlertaLeida(int alertaId) async {
+    final res = await _http.patch(
+      Uri.parse('$_base/me/alertas/$alertaId/leer'),
+      headers: await _headers(),
+    );
+    _check(res);
+  }
+
+  Future<void> marcarTodasAlertasLeidas() async {
+    final res = await _http.patch(
+      Uri.parse('$_base/me/alertas/leer-todas'),
+      headers: await _headers(),
+    );
+    _check(res);
+  }
+
   Future<List<Licitacion>> getMyLicitaciones() async {
     final res = await _http.get(
       Uri.parse('$_base/licitaciones/mine'),

@@ -5,15 +5,19 @@ import '../../api/client.dart';
 import '../../api/models.dart';
 import '../../widgets/pipeline_badge.dart';
 import '../licitacion_detail_screen.dart';
+import '../adjudicacion_detail_screen.dart';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 const _navy   = Color(0xFF0F1F3D);
 const _blue   = Color(0xFF2563EB);
+const _teal   = Color(0xFF0D9488);
+const _gold   = Color(0xFFF59E0B);
 const _ink    = Color(0xFF111827);
 const _muted  = Color(0xFF6B7280);
 const _bg     = Color(0xFFF1F4F9);
 const _white  = Color(0xFFFFFFFF);
 const _red    = Color(0xFFDC2626);
+const _border = Color(0xFFE5E7EB);
 
 class MiPanelScreen extends StatefulWidget {
   const MiPanelScreen({super.key});
@@ -23,7 +27,9 @@ class MiPanelScreen extends StatefulWidget {
 }
 
 class _MiPanelScreenState extends State<MiPanelScreen> {
-  List<Licitacion> _items = [];
+  List<Licitacion>   _items         = [];
+  List<Adjudicacion> _adjudicaciones = [];
+  List<Alerta>       _alertas        = [];
   bool _loading = true;
   String? _error;
 
@@ -36,19 +42,45 @@ class _MiPanelScreenState extends State<MiPanelScreen> {
   Future<void> _load() async {
     setState(() { _loading = true; _error = null; });
     try {
-      final items = await ApiClient().getMyLicitaciones();
-      if (mounted) setState(() { _items = items; _loading = false; });
+      final results = await Future.wait([
+        ApiClient().getMyLicitaciones(),
+        ApiClient().getMyAdjudicaciones(),
+        ApiClient().getMyAlertas(),
+      ]);
+      if (mounted) {
+        setState(() {
+          _items          = results[0] as List<Licitacion>;
+          _adjudicaciones = results[1] as List<Adjudicacion>;
+          _alertas        = results[2] as List<Alerta>;
+          _loading        = false;
+        });
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = e.toString().replaceFirst('Exception: ', '');
+          _error   = e.toString().replaceFirst('Exception: ', '');
           _loading = false;
         });
       }
     }
   }
 
-  // ── Derived data ─────────────────────────────────────────────────────────────
+  Future<void> _marcarTodasLeidas() async {
+    try {
+      await ApiClient().marcarTodasAlertasLeidas();
+      if (mounted) setState(() {
+        _alertas = _alertas.map((a) => Alerta(
+          id: a.id, adjudicacionId: a.adjudicacionId,
+          licitacionId: a.licitacionId, mensaje: a.mensaje,
+          leida: true, createdAt: a.createdAt, adjTitulo: a.adjTitulo,
+        )).toList();
+      });
+    } catch (_) {}
+  }
+
+  // ── Derived data ──────────────────────────────────────────────────────────────
+
+  List<Alerta> get _alertasNoLeidas => _alertas.where((a) => !a.leida).toList();
 
   List<Licitacion> get _urgentes => _items.where((l) {
     final d = l.fechaLimiteOferta;
@@ -132,6 +164,8 @@ class _MiPanelScreenState extends State<MiPanelScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final hasContent = _items.isNotEmpty || _adjudicaciones.isNotEmpty;
+
     return CupertinoPageScaffold(
       backgroundColor: _bg,
       child: CustomScrollView(
@@ -166,7 +200,7 @@ class _MiPanelScreenState extends State<MiPanelScreen> {
                 ],
               )),
             )
-          else if (_items.isEmpty)
+          else if (!hasContent)
             const SliverFillRemaining(
               child: Center(child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -183,69 +217,71 @@ class _MiPanelScreenState extends State<MiPanelScreen> {
               )),
             )
           else ...[
-            // ── KPI strip ───────────────────────────────────────────────────────
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
-                child: Row(
-                  children: [
-                    _Kpi(
-                      label: 'Asignadas',
-                      value: '${_items.length}',
-                      icon: CupertinoIcons.doc_text_fill,
-                      color: _blue,
-                    ),
-                    const SizedBox(width: 10),
-                    _Kpi(
-                      label: 'Vencen pronto',
-                      value: '${_urgentes.length}',
-                      icon: CupertinoIcons.clock_fill,
-                      color: _urgentes.isEmpty ? _muted : _red,
-                    ),
-                    const SizedBox(width: 10),
-                    _Kpi(
-                      label: 'Importe total',
-                      value: _fmtImporte(_totalImporte),
-                      icon: CupertinoIcons.money_euro_circle_fill,
-                      color: _navy,
-                    ),
-                  ],
+            // ── Alertas banner ────────────────────────────────────────────────
+            if (_alertasNoLeidas.isNotEmpty)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+                  child: _AlertasBanner(
+                    alertas: _alertasNoLeidas,
+                    onMarcarTodas: _marcarTodasLeidas,
+                    onTapAdj: (a) {
+                      Navigator.of(context).push(CupertinoPageRoute(
+                        builder: (_) => AdjudicacionDetailScreen(
+                          adj: Adjudicacion(
+                            id: a.adjudicacionId,
+                            titulo: a.adjTitulo,
+                            numeroExpediente: '',
+                            createdAt: a.createdAt,
+                          ),
+                        ),
+                      )).then((_) => _load());
+                    },
+                  ),
                 ),
               ),
-            ),
 
-            // ── Urgentes ────────────────────────────────────────────────────────
+            // ── KPI strip ─────────────────────────────────────────────────────
+            if (_items.isNotEmpty)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                  child: Row(
+                    children: [
+                      _Kpi(
+                        label: 'Asignadas',
+                        value: '${_items.length}',
+                        icon: CupertinoIcons.doc_text_fill,
+                        color: _blue,
+                      ),
+                      const SizedBox(width: 10),
+                      _Kpi(
+                        label: 'Vencen pronto',
+                        value: '${_urgentes.length}',
+                        icon: CupertinoIcons.clock_fill,
+                        color: _urgentes.isEmpty ? _muted : _red,
+                      ),
+                      const SizedBox(width: 10),
+                      _Kpi(
+                        label: 'Importe total',
+                        value: _fmtImporte(_totalImporte),
+                        icon: CupertinoIcons.money_euro_circle_fill,
+                        color: _navy,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+            // ── Urgentes ──────────────────────────────────────────────────────
             if (_urgentes.isNotEmpty) ...[
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(20, 24, 20, 10),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 4, height: 16,
-                        decoration: BoxDecoration(
-                          color: _red, borderRadius: BorderRadius.circular(2)),
-                      ),
-                      const SizedBox(width: 8),
-                      const Text(
-                        'Plazo próximo',
-                        style: TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w700,
-                          color: _red, letterSpacing: -0.2),
-                      ),
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: _red.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          '${_urgentes.length}',
-                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: _red),
-                        ),
-                      ),
-                    ],
+                  child: _SectionHeader(
+                    label: 'Plazo próximo',
+                    count: _urgentes.length,
+                    accentColor: _red,
                   ),
                 ),
               ),
@@ -265,43 +301,20 @@ class _MiPanelScreenState extends State<MiPanelScreen> {
               ),
             ],
 
-            // ── Resto ────────────────────────────────────────────────────────────
+            // ── Resto licitaciones ─────────────────────────────────────────────
             if (_resto.isNotEmpty) ...[
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(20, 24, 20, 10),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 4, height: 16,
-                        decoration: BoxDecoration(
-                          color: _blue, borderRadius: BorderRadius.circular(2)),
-                      ),
-                      const SizedBox(width: 8),
-                      const Text(
-                        'Mis licitaciones',
-                        style: TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w700,
-                          color: _navy, letterSpacing: -0.2),
-                      ),
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: _blue.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          '${_resto.length}',
-                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: _blue),
-                        ),
-                      ),
-                    ],
+                  child: _SectionHeader(
+                    label: 'Mis licitaciones',
+                    count: _resto.length,
+                    accentColor: _blue,
                   ),
                 ),
               ),
               SliverPadding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 32),
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
                 sliver: SliverList(
                   delegate: SliverChildBuilderDelegate(
                     (ctx, i) => _LicitacionRow(
@@ -315,11 +328,403 @@ class _MiPanelScreenState extends State<MiPanelScreen> {
                 ),
               ),
             ],
+
+            // ── Adjudicaciones ────────────────────────────────────────────────
+            if (_adjudicaciones.isNotEmpty) ...[
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 28, 20, 10),
+                  child: _SectionHeader(
+                    label: 'Adjudicaciones',
+                    count: _adjudicaciones.length,
+                    accentColor: _teal,
+                    icon: CupertinoIcons.checkmark_seal_fill,
+                    subtitle: 'Pliegos que trabajaste y fueron adjudicados',
+                  ),
+                ),
+              ),
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 32),
+                sliver: SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (ctx, i) => _AdjudicacionRow(
+                      adj: _adjudicaciones[i],
+                      onTap: () {
+                        Navigator.of(context).push(CupertinoPageRoute(
+                          builder: (_) => AdjudicacionDetailScreen(adj: _adjudicaciones[i]),
+                        )).then((_) => _load());
+                      },
+                    ),
+                    childCount: _adjudicaciones.length,
+                  ),
+                ),
+              ),
+            ],
+
+            if (_adjudicaciones.isEmpty)
+              const SliverToBoxAdapter(child: SizedBox(height: 32)),
           ],
         ],
       ),
     );
   }
+}
+
+// ── Section header ────────────────────────────────────────────────────────────
+
+class _SectionHeader extends StatelessWidget {
+  final String label;
+  final int count;
+  final Color accentColor;
+  final IconData? icon;
+  final String? subtitle;
+
+  const _SectionHeader({
+    required this.label,
+    required this.count,
+    required this.accentColor,
+    this.icon,
+    this.subtitle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 4, height: 16,
+              decoration: BoxDecoration(
+                color: accentColor, borderRadius: BorderRadius.circular(2)),
+            ),
+            const SizedBox(width: 8),
+            if (icon != null) ...[
+              Icon(icon, size: 14, color: accentColor),
+              const SizedBox(width: 5),
+            ],
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 15, fontWeight: FontWeight.w700,
+                color: accentColor == _blue || accentColor == _teal ? _navy : accentColor,
+                letterSpacing: -0.2,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              decoration: BoxDecoration(
+                color: accentColor.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                '$count',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: accentColor),
+              ),
+            ),
+          ],
+        ),
+        if (subtitle != null) ...[
+          const SizedBox(height: 3),
+          Padding(
+            padding: const EdgeInsets.only(left: 12),
+            child: Text(
+              subtitle!,
+              style: const TextStyle(fontSize: 11, color: _muted),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+// ── Alertas banner ────────────────────────────────────────────────────────────
+
+class _AlertasBanner extends StatelessWidget {
+  final List<Alerta> alertas;
+  final VoidCallback onMarcarTodas;
+  final void Function(Alerta) onTapAdj;
+
+  const _AlertasBanner({
+    required this.alertas,
+    required this.onMarcarTodas,
+    required this.onTapAdj,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: _gold.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _gold.withValues(alpha: 0.30)),
+      ),
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 24, height: 24,
+                decoration: BoxDecoration(
+                  color: _gold.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Icon(CupertinoIcons.bell_fill, size: 13, color: _gold),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '${alertas.length} ${alertas.length == 1 ? 'adjudicación nueva' : 'adjudicaciones nuevas'}',
+                  style: const TextStyle(
+                    fontSize: 13, fontWeight: FontWeight.w700, color: _ink),
+                ),
+              ),
+              CupertinoButton(
+                padding: EdgeInsets.zero,
+                minimumSize: Size.zero,
+                onPressed: onMarcarTodas,
+                child: const Text(
+                  'Marcar leídas',
+                  style: TextStyle(fontSize: 11, color: _muted),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ...alertas.take(3).map((a) => GestureDetector(
+            onTap: () => onTapAdj(a),
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                children: [
+                  const Icon(CupertinoIcons.checkmark_seal_fill, size: 11, color: _teal),
+                  const SizedBox(width: 7),
+                  Expanded(
+                    child: Text(
+                      a.adjTitulo.isNotEmpty ? a.adjTitulo : a.mensaje,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12, color: _ink),
+                    ),
+                  ),
+                  const Icon(CupertinoIcons.chevron_right, size: 11, color: _muted),
+                ],
+              ),
+            ),
+          )),
+          if (alertas.length > 3)
+            Text(
+              '+${alertas.length - 3} más',
+              style: const TextStyle(fontSize: 11, color: _muted),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Adjudicacion row ──────────────────────────────────────────────────────────
+
+class _AdjudicacionRow extends StatefulWidget {
+  final Adjudicacion adj;
+  final VoidCallback onTap;
+  const _AdjudicacionRow({required this.adj, required this.onTap});
+
+  @override
+  State<_AdjudicacionRow> createState() => _AdjudicacionRowState();
+}
+
+class _AdjudicacionRowState extends State<_AdjudicacionRow> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final a = widget.adj;
+    final ratio = a.ratio;
+    final ratioLabel = ratio != null ? '${(ratio * 100).toStringAsFixed(1)} %' : null;
+    final ratioColor = ratio == null ? _muted : (ratio < 0 ? _red : _teal);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(0, 4, 0, 4),
+      child: GestureDetector(
+        onTapDown: (_) => setState(() => _pressed = true),
+        onTapUp: (_) { setState(() => _pressed = false); widget.onTap(); },
+        onTapCancel: () => setState(() => _pressed = false),
+        behavior: HitTestBehavior.opaque,
+        child: AnimatedScale(
+          scale: _pressed ? 0.975 : 1.0,
+          duration: _pressed
+              ? const Duration(milliseconds: 70)
+              : const Duration(milliseconds: 280),
+          curve: _pressed ? Curves.easeIn : const Cubic(0.16, 1.0, 0.3, 1.0),
+          child: Container(
+            decoration: BoxDecoration(
+              color: _white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _teal.withValues(alpha: 0.20)),
+              boxShadow: [
+                BoxShadow(
+                  color: _navy.withValues(alpha: 0.06),
+                  blurRadius: 10,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Teal header bar
+                  Container(
+                    color: _teal.withValues(alpha: 0.12),
+                    padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
+                    child: Row(
+                      children: [
+                        const Icon(CupertinoIcons.checkmark_seal_fill,
+                            size: 13, color: _teal),
+                        const SizedBox(width: 7),
+                        Expanded(
+                          child: Text(
+                            a.titulo,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: _navy,
+                              height: 1.35,
+                              letterSpacing: -0.1,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        const Icon(CupertinoIcons.chevron_right, size: 13, color: _teal),
+                      ],
+                    ),
+                  ),
+                  // Body
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (a.adjudicatarioNombre != null) ...[
+                          Row(
+                            children: [
+                              const Icon(CupertinoIcons.person_fill, size: 11, color: _muted),
+                              const SizedBox(width: 5),
+                              Expanded(
+                                child: Text(
+                                  a.adjudicatarioNombre!,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 12, fontWeight: FontWeight.w600, color: _ink),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                        Row(
+                          children: [
+                            if (a.importeAdjudicado != null) ...[
+                              _AdjMeta(
+                                label: 'Adjudicado',
+                                value: _fmtEur(a.importeAdjudicado!),
+                                valueColor: _teal,
+                              ),
+                              const _AdjDivider(),
+                            ],
+                            if (ratioLabel != null) ...[
+                              _AdjMeta(
+                                label: 'Variación',
+                                value: ratioLabel,
+                                valueColor: ratioColor,
+                              ),
+                              const _AdjDivider(),
+                            ],
+                            if (a.fechaAdjudicacion != null)
+                              _AdjMeta(
+                                label: 'Adjudicado',
+                                value: a.fechaAdjudicacion!,
+                                icon: CupertinoIcons.calendar,
+                              ),
+                            const Spacer(),
+                            if (a.organismoNombre != null)
+                              Flexible(
+                                child: Text(
+                                  a.organismoNombre!,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.right,
+                                  style: const TextStyle(fontSize: 10, color: _muted),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AdjMeta extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color? valueColor;
+  final IconData? icon;
+  const _AdjMeta({required this.label, required this.value, this.valueColor, this.icon});
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Text(label, style: const TextStyle(fontSize: 10, color: _muted, letterSpacing: 0.1)),
+      const SizedBox(height: 2),
+      Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 11, color: _muted),
+            const SizedBox(width: 3),
+          ],
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: valueColor ?? _ink,
+            ),
+          ),
+        ],
+      ),
+    ],
+  );
+}
+
+class _AdjDivider extends StatelessWidget {
+  const _AdjDivider();
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 1, height: 28,
+    margin: const EdgeInsets.symmetric(horizontal: 12),
+    color: _border,
+  );
 }
 
 // ── KPI chip ──────────────────────────────────────────────────────────────────
@@ -365,7 +770,7 @@ class _Kpi extends StatelessWidget {
   }
 }
 
-// ── Licitacion row (same tile design as licitaciones_screen) ─────────────────
+// ── Licitacion row ────────────────────────────────────────────────────────────
 
 const _kEaseOutExpo = Cubic(0.16, 1.0, 0.3, 1.0);
 
@@ -443,7 +848,6 @@ class _LicitacionRowState extends State<_LicitacionRow>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // ── Teal header ──────────────────────────────────────────
                     Container(
                       color: const Color(0xFF2dd4bf),
                       padding: const EdgeInsets.fromLTRB(14, 11, 10, 11),
@@ -482,13 +886,11 @@ class _LicitacionRowState extends State<_LicitacionRow>
                         ],
                       ),
                     ),
-                    // ── Body ─────────────────────────────────────────────────
                     Padding(
                       padding: const EdgeInsets.fromLTRB(14, 11, 14, 12),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Organismo
                           if (l.organismoNombre != null) ...[
                             Row(
                               children: [
@@ -511,7 +913,6 @@ class _LicitacionRowState extends State<_LicitacionRow>
                             ),
                             const SizedBox(height: 10),
                           ],
-                          // Meta row: importe | fecha | deadline + outlook
                           Row(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
@@ -547,7 +948,6 @@ class _LicitacionRowState extends State<_LicitacionRow>
                                 _OutlookButton(onTap: () => _addToOutlook(l)),
                             ],
                           ),
-                          // Estado + owner footer
                           if (l.ingramEstado != null ||
                               l.ingramOwner != null ||
                               l.assigneeNombre != null) ...[
