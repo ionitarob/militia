@@ -45,7 +45,7 @@ class _MiPanelScreenState extends State<MiPanelScreen> {
       final results = await Future.wait([
         ApiClient().getMyLicitaciones(),
         ApiClient().getMyAdjudicaciones(),
-        ApiClient().getMyAlertas(),
+        ApiClient().getMyAlertas().catchError((_) => <Alerta>[]),
       ]);
       if (mounted) {
         setState(() {

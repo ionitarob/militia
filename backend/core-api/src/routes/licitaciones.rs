@@ -52,6 +52,9 @@ pub struct LicitacionSummary {
     motivo_perdida: Option<String>,
     motivo_perdida_texto: Option<String>,
     organismo_nombre: Option<String>,
+    cat1: Option<String>,
+    cat2: Option<String>,
+    cat3: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -179,7 +182,10 @@ SELECT
          WHERE la2.licitacion_id = l.id AND la2.active = TRUE),
         '[]'::JSON
     )::TEXT                                  AS assignees_json,
-    o.nombre                                 AS organismo_nombre
+    o.nombre                                 AS organismo_nombre,
+    at.cat1                                  AS cat1,
+    at.cat2                                  AS cat2,
+    at.cat3                                  AS cat3
 FROM licitacion l
 LEFT JOIN area_tecnologica at ON at.id = l.area_tecnologica_id
 LEFT JOIN organismo o ON o.id = l.organismo_id
@@ -192,36 +198,34 @@ WHERE TRUE
   AND ($8::TEXT IS NULL OR at.cat1 = ANY(string_to_array($8, ',')))
   AND ($9::TEXT IS NULL OR at.cat2 = ANY(string_to_array($9, ',')))
   AND ($10::TEXT IS NULL OR at.cat3 = ANY(string_to_array($10, ',')))
-  AND CASE $11::TEXT
-    WHEN 'vigentes'  THEN (l.fecha_limite_oferta IS NULL OR l.fecha_limite_oferta::DATE >= CURRENT_DATE)
-    WHEN 'caducadas' THEN (l.fecha_limite_oferta IS NOT NULL AND l.fecha_limite_oferta::DATE < CURRENT_DATE)
-    WHEN 'lt7'  THEN l.fecha_limite_oferta::DATE <= CURRENT_DATE + 7
-    WHEN 'lt15' THEN l.fecha_limite_oferta::DATE <= CURRENT_DATE + 14
-    WHEN 'lt30' THEN l.fecha_limite_oferta::DATE <= CURRENT_DATE + 29
-    WHEN 'gt30' THEN l.fecha_limite_oferta::DATE >  CURRENT_DATE + 30
-    ELSE TRUE
-  END
-  AND CASE $12::TEXT
-    WHEN 'lt50k'    THEN l.importe_licitacion < 50000
-    WHEN '50-100k'  THEN l.importe_licitacion BETWEEN 50000    AND 100000
-    WHEN '100-250k' THEN l.importe_licitacion BETWEEN 100001   AND 250000
-    WHEN '250-500k' THEN l.importe_licitacion BETWEEN 250001   AND 500000
-    WHEN '500k-1m'  THEN l.importe_licitacion BETWEEN 500001   AND 1000000
-    WHEN 'gt1m'     THEN l.importe_licitacion > 1000000
-    ELSE TRUE
-  END
-  AND CASE $13::TEXT
-    WHEN 'lt6'   THEN l.duracion_meses < 6
-    WHEN '6-12'  THEN l.duracion_meses BETWEEN  6 AND 12
-    WHEN '12-18' THEN l.duracion_meses BETWEEN 12 AND 18
-    WHEN '18-24' THEN l.duracion_meses BETWEEN 18 AND 24
-    WHEN '24-36' THEN l.duracion_meses BETWEEN 24 AND 36
-    WHEN '36-48' THEN l.duracion_meses BETWEEN 36 AND 48
-    WHEN '48-60' THEN l.duracion_meses BETWEEN 48 AND 60
-    WHEN '60-72' THEN l.duracion_meses BETWEEN 60 AND 72
-    WHEN 'gt72'  THEN l.duracion_meses > 72
-    ELSE TRUE
-  END
+  AND ($11::TEXT IS NULL OR (
+    ('activas'   = ANY(string_to_array($11, ',')) AND (l.fecha_limite_oferta IS NULL OR l.fecha_limite_oferta::DATE >= CURRENT_DATE))
+    OR ('vigentes'  = ANY(string_to_array($11, ',')) AND (l.fecha_limite_oferta IS NULL OR l.fecha_limite_oferta::DATE >= CURRENT_DATE))
+    OR ('caducadas' = ANY(string_to_array($11, ',')) AND (l.fecha_limite_oferta IS NOT NULL AND l.fecha_limite_oferta::DATE < CURRENT_DATE))
+    OR ('lt7'  = ANY(string_to_array($11, ',')) AND l.fecha_limite_oferta::DATE <= CURRENT_DATE + 7)
+    OR ('lt15' = ANY(string_to_array($11, ',')) AND l.fecha_limite_oferta::DATE <= CURRENT_DATE + 14)
+    OR ('lt30' = ANY(string_to_array($11, ',')) AND l.fecha_limite_oferta::DATE <= CURRENT_DATE + 29)
+    OR ('gt30' = ANY(string_to_array($11, ',')) AND l.fecha_limite_oferta::DATE >  CURRENT_DATE + 30)
+  ))
+  AND ($12::TEXT IS NULL OR (
+    ('lt50k'    = ANY(string_to_array($12, ',')) AND l.importe_licitacion < 50000)
+    OR ('50-100k'  = ANY(string_to_array($12, ',')) AND l.importe_licitacion BETWEEN 50000    AND 100000)
+    OR ('100-250k' = ANY(string_to_array($12, ',')) AND l.importe_licitacion BETWEEN 100001   AND 250000)
+    OR ('250-500k' = ANY(string_to_array($12, ',')) AND l.importe_licitacion BETWEEN 250001   AND 500000)
+    OR ('500k-1m'  = ANY(string_to_array($12, ',')) AND l.importe_licitacion BETWEEN 500001   AND 1000000)
+    OR ('gt1m'     = ANY(string_to_array($12, ',')) AND l.importe_licitacion > 1000000)
+  ))
+  AND ($13::TEXT IS NULL OR (
+    ('lt6'   = ANY(string_to_array($13, ',')) AND l.duracion_meses < 6)
+    OR ('6-12'  = ANY(string_to_array($13, ',')) AND l.duracion_meses BETWEEN  6 AND 12)
+    OR ('12-18' = ANY(string_to_array($13, ',')) AND l.duracion_meses BETWEEN 12 AND 18)
+    OR ('18-24' = ANY(string_to_array($13, ',')) AND l.duracion_meses BETWEEN 18 AND 24)
+    OR ('24-36' = ANY(string_to_array($13, ',')) AND l.duracion_meses BETWEEN 24 AND 36)
+    OR ('36-48' = ANY(string_to_array($13, ',')) AND l.duracion_meses BETWEEN 36 AND 48)
+    OR ('48-60' = ANY(string_to_array($13, ',')) AND l.duracion_meses BETWEEN 48 AND 60)
+    OR ('60-72' = ANY(string_to_array($13, ',')) AND l.duracion_meses BETWEEN 60 AND 72)
+    OR ('gt72'  = ANY(string_to_array($13, ',')) AND l.duracion_meses > 72)
+  ))
   AND ($14::TEXT IS NULL
        OR ($14 = 'activas' AND l.pipeline_stage NOT IN ('ganada','perdida','desierta'))
        OR ($14 != 'activas' AND l.pipeline_stage::TEXT = $14))
@@ -257,36 +261,34 @@ WHERE TRUE
   AND ($6::TEXT IS NULL OR at.cat1 = ANY(string_to_array($6, ',')))
   AND ($7::TEXT IS NULL OR at.cat2 = ANY(string_to_array($7, ',')))
   AND ($8::TEXT IS NULL OR at.cat3 = ANY(string_to_array($8, ',')))
-  AND CASE $9::TEXT
-    WHEN 'vigentes'  THEN (l.fecha_limite_oferta IS NULL OR l.fecha_limite_oferta::DATE >= CURRENT_DATE)
-    WHEN 'caducadas' THEN (l.fecha_limite_oferta IS NOT NULL AND l.fecha_limite_oferta::DATE < CURRENT_DATE)
-    WHEN 'lt7'  THEN l.fecha_limite_oferta::DATE <= CURRENT_DATE + 7
-    WHEN 'lt15' THEN l.fecha_limite_oferta::DATE <= CURRENT_DATE + 14
-    WHEN 'lt30' THEN l.fecha_limite_oferta::DATE <= CURRENT_DATE + 29
-    WHEN 'gt30' THEN l.fecha_limite_oferta::DATE >  CURRENT_DATE + 30
-    ELSE TRUE
-  END
-  AND CASE $10::TEXT
-    WHEN 'lt50k'    THEN l.importe_licitacion < 50000
-    WHEN '50-100k'  THEN l.importe_licitacion BETWEEN 50000    AND 100000
-    WHEN '100-250k' THEN l.importe_licitacion BETWEEN 100001   AND 250000
-    WHEN '250-500k' THEN l.importe_licitacion BETWEEN 250001   AND 500000
-    WHEN '500k-1m'  THEN l.importe_licitacion BETWEEN 500001   AND 1000000
-    WHEN 'gt1m'     THEN l.importe_licitacion > 1000000
-    ELSE TRUE
-  END
-  AND CASE $11::TEXT
-    WHEN 'lt6'   THEN l.duracion_meses < 6
-    WHEN '6-12'  THEN l.duracion_meses BETWEEN  6 AND 12
-    WHEN '12-18' THEN l.duracion_meses BETWEEN 12 AND 18
-    WHEN '18-24' THEN l.duracion_meses BETWEEN 18 AND 24
-    WHEN '24-36' THEN l.duracion_meses BETWEEN 24 AND 36
-    WHEN '36-48' THEN l.duracion_meses BETWEEN 36 AND 48
-    WHEN '48-60' THEN l.duracion_meses BETWEEN 48 AND 60
-    WHEN '60-72' THEN l.duracion_meses BETWEEN 60 AND 72
-    WHEN 'gt72'  THEN l.duracion_meses > 72
-    ELSE TRUE
-  END
+  AND ($9::TEXT IS NULL OR (
+    ('activas'   = ANY(string_to_array($9, ',')) AND (l.fecha_limite_oferta IS NULL OR l.fecha_limite_oferta::DATE >= CURRENT_DATE))
+    OR ('vigentes'  = ANY(string_to_array($9, ',')) AND (l.fecha_limite_oferta IS NULL OR l.fecha_limite_oferta::DATE >= CURRENT_DATE))
+    OR ('caducadas' = ANY(string_to_array($9, ',')) AND (l.fecha_limite_oferta IS NOT NULL AND l.fecha_limite_oferta::DATE < CURRENT_DATE))
+    OR ('lt7'  = ANY(string_to_array($9, ',')) AND l.fecha_limite_oferta::DATE <= CURRENT_DATE + 7)
+    OR ('lt15' = ANY(string_to_array($9, ',')) AND l.fecha_limite_oferta::DATE <= CURRENT_DATE + 14)
+    OR ('lt30' = ANY(string_to_array($9, ',')) AND l.fecha_limite_oferta::DATE <= CURRENT_DATE + 29)
+    OR ('gt30' = ANY(string_to_array($9, ',')) AND l.fecha_limite_oferta::DATE >  CURRENT_DATE + 30)
+  ))
+  AND ($10::TEXT IS NULL OR (
+    ('lt50k'    = ANY(string_to_array($10, ',')) AND l.importe_licitacion < 50000)
+    OR ('50-100k'  = ANY(string_to_array($10, ',')) AND l.importe_licitacion BETWEEN 50000    AND 100000)
+    OR ('100-250k' = ANY(string_to_array($10, ',')) AND l.importe_licitacion BETWEEN 100001   AND 250000)
+    OR ('250-500k' = ANY(string_to_array($10, ',')) AND l.importe_licitacion BETWEEN 250001   AND 500000)
+    OR ('500k-1m'  = ANY(string_to_array($10, ',')) AND l.importe_licitacion BETWEEN 500001   AND 1000000)
+    OR ('gt1m'     = ANY(string_to_array($10, ',')) AND l.importe_licitacion > 1000000)
+  ))
+  AND ($11::TEXT IS NULL OR (
+    ('lt6'   = ANY(string_to_array($11, ',')) AND l.duracion_meses < 6)
+    OR ('6-12'  = ANY(string_to_array($11, ',')) AND l.duracion_meses BETWEEN  6 AND 12)
+    OR ('12-18' = ANY(string_to_array($11, ',')) AND l.duracion_meses BETWEEN 12 AND 18)
+    OR ('18-24' = ANY(string_to_array($11, ',')) AND l.duracion_meses BETWEEN 18 AND 24)
+    OR ('24-36' = ANY(string_to_array($11, ',')) AND l.duracion_meses BETWEEN 24 AND 36)
+    OR ('36-48' = ANY(string_to_array($11, ',')) AND l.duracion_meses BETWEEN 36 AND 48)
+    OR ('48-60' = ANY(string_to_array($11, ',')) AND l.duracion_meses BETWEEN 48 AND 60)
+    OR ('60-72' = ANY(string_to_array($11, ',')) AND l.duracion_meses BETWEEN 60 AND 72)
+    OR ('gt72'  = ANY(string_to_array($11, ',')) AND l.duracion_meses > 72)
+  ))
   AND ($12::TEXT IS NULL
        OR ($12 = 'activas' AND l.pipeline_stage NOT IN ('ganada','perdida','desierta'))
        OR ($12 != 'activas' AND l.pipeline_stage::TEXT = $12))

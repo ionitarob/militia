@@ -63,6 +63,10 @@ def lambda_handler(event, context):
         return _run_scrape_documents(event, context, creds, bucket)
     if mode == "restore_from_s3":
         return _run_restore_from_s3(event, context, bucket)
+    if mode == "fetch_document":
+        return _run_fetch_document(event, context, creds, bucket)
+    if mode == "fetch_document_url":
+        return _run_fetch_document_url(event, context, creds, bucket)
     return _run_daily(event, context, creds, bucket)
 
 
@@ -327,6 +331,7 @@ def _download_documents(session, external_id: str, doc_links: list, bucket: str,
                 "s3_key":       s3_key,
                 "content_type": content_type,
                 "size_bytes":   len(resp.content),
+                "source_url":   url,
             })
             log.info("Uploaded doc %s → s3://%s/%s (%d bytes)", nombre, bucket, s3_key, len(resp.content))
         except Exception as e:
@@ -604,6 +609,142 @@ def _run_scrape_documents(event, context, creds, bucket):
         return {"statusCode": 202, "scraped": len(scraped), "message": "next page triggered"}
 
     return {"statusCode": 200, "scraped": len(scraped)}
+
+
+# ── Fetch documents on-demand for a single licitacion ────────────────────────
+
+def _run_fetch_document(event, context, creds, bucket):
+    """
+    Synchronous on-demand mode: scrapes a single licitacion's detail page,
+    downloads its documents to S3, and upserts them into licitacion_documento
+    via Aurora Data API.  Called by SummarizeLambda when no docs are in DB yet.
+
+    Event: {"mode": "fetch_document", "external_id": "...", "licitacion_id": 123}
+    Returns: {"documents": [{nombre, s3_key, content_type, size_bytes}, ...]}
+    """
+    external_id    = event.get("external_id")
+    licitacion_id  = event.get("licitacion_id")
+    db_cluster_arn = os.environ.get("DB_CLUSTER_ARN")
+    db_secret_arn  = os.environ.get("DB_SECRET_ARN")
+
+    if not external_id:
+        return {"statusCode": 400, "error": "external_id required"}
+
+    session = portal.create_session(creds["username"], creds["password"])
+    log.info("fetch_document: login ok, fetching external_id=%s", external_id)
+
+    s3 = boto3.client("s3")
+    resp = portal.get(session, f"{BASE}/licitaciones-ficha.php?id={external_id}", delay=0.3)
+    doc_links = parsers.parse_documents(resp.text)
+    log.info("fetch_document: found %d doc links on portal page", len(doc_links))
+
+    docs = _download_documents(session, external_id, doc_links, bucket, s3)
+    log.info("fetch_document: downloaded %d documents", len(docs))
+
+    # Upsert into DB if we have a licitacion_id and Data API credentials
+    if licitacion_id and db_cluster_arn and db_secret_arn and docs:
+        rds = boto3.client("rds-data")
+        for doc in docs:
+            try:
+                rds.execute_statement(
+                    resourceArn=db_cluster_arn,
+                    secretArn=db_secret_arn,
+                    database="imliti",
+                    sql="""
+                        INSERT INTO licitacion_documento
+                            (licitacion_id, nombre, s3_key, content_type, size_bytes, source_url)
+                        VALUES
+                            (:lid, :nombre, :s3_key, :ct, :sz, :src)
+                        ON CONFLICT (licitacion_id, s3_key) DO UPDATE
+                            SET size_bytes  = EXCLUDED.size_bytes,
+                                source_url  = COALESCE(EXCLUDED.source_url, licitacion_documento.source_url)
+                    """,
+                    parameters=[
+                        {"name": "lid",    "value": {"longValue":   int(licitacion_id)}},
+                        {"name": "nombre", "value": {"stringValue": doc["nombre"]}},
+                        {"name": "s3_key", "value": {"stringValue": doc["s3_key"]}},
+                        {"name": "ct",     "value": {"stringValue": doc.get("content_type") or "application/octet-stream"}},
+                        {"name": "sz",     "value": {"longValue":   doc.get("size_bytes") or 0}},
+                        {"name": "src",    "value": {"stringValue": doc.get("source_url") or ""} if doc.get("source_url") else {"isNull": True}},
+                    ],
+                )
+            except Exception as e:
+                log.warning("fetch_document: DB upsert failed for %s: %s", doc["nombre"], e)
+
+    return {"statusCode": 200, "documents": docs}
+
+
+# ── Fetch a single document by URL (called from SummarizeLambda) ─────────────
+
+def _run_fetch_document_url(event, context, creds, bucket):
+    """
+    Download one document by its direct URL through the portal session.
+    Called by SummarizeLambda when it finds a hyperlink inside a PDF that points
+    to another document (e.g. Pliego de Prescripciones Técnicas on an external server).
+
+    Event: {"mode": "fetch_document_url", "url": "https://...", "licitacion_id": 123,
+            "nombre": "optional display name"}
+    Returns: {"documents": [{nombre, s3_key, content_type, size_bytes, source_url}]}
+    """
+    url           = event.get("url")
+    nombre        = event.get("nombre", "documento_enlazado")
+    licitacion_id = event.get("licitacion_id")
+
+    if not url:
+        return {"statusCode": 400, "error": "url required", "documents": []}
+
+    session = portal.create_session(creds["username"], creds["password"])
+    s3      = boto3.client("s3")
+
+    # Re-use _download_documents — pass a synthetic ext_id for the S3 key path
+    ext_id = f"linked/{licitacion_id}" if licitacion_id else "linked/unknown"
+    docs   = _download_documents(
+        session,
+        ext_id,
+        [{"href": url, "nombre": nombre}],
+        bucket,
+        s3,
+    )
+    log.info("fetch_document_url: downloaded %d docs from %s", len(docs), url)
+
+    # Upsert into licitacion_documento via Data API so future summaries find them
+    db_cluster_arn = os.environ.get("DB_CLUSTER_ARN")
+    db_secret_arn  = os.environ.get("DB_SECRET_ARN")
+    if licitacion_id and db_cluster_arn and db_secret_arn and docs:
+        rds = boto3.client("rds-data")
+        for doc in docs:
+            try:
+                src_param = (
+                    {"stringValue": doc["source_url"]}
+                    if doc.get("source_url")
+                    else {"isNull": True}
+                )
+                rds.execute_statement(
+                    resourceArn=db_cluster_arn,
+                    secretArn=db_secret_arn,
+                    database="imliti",
+                    sql="""
+                        INSERT INTO licitacion_documento
+                            (licitacion_id, nombre, s3_key, content_type, size_bytes, source_url)
+                        VALUES (:lid, :nombre, :s3_key, :ct, :sz, :src)
+                        ON CONFLICT (licitacion_id, s3_key) DO UPDATE
+                            SET size_bytes = EXCLUDED.size_bytes,
+                                source_url = COALESCE(EXCLUDED.source_url,
+                                                      licitacion_documento.source_url)
+                    """,
+                    parameters=[
+                        {"name": "lid",    "value": {"longValue":   int(licitacion_id)}},
+                        {"name": "nombre", "value": {"stringValue": doc["nombre"]}},
+                        {"name": "s3_key", "value": {"stringValue": doc["s3_key"]}},
+                        {"name": "ct",     "value": {"stringValue": doc.get("content_type") or "application/octet-stream"}},
+                        {"name": "sz",     "value": {"longValue":   doc.get("size_bytes") or 0}},
+                        {"name": "src",    "value": src_param},
+                    ],
+                )
+            except Exception as e:
+                log.warning("fetch_document_url: DB upsert failed for %s: %s", doc["nombre"], e)
+
+    return {"statusCode": 200, "documents": docs}
 
 
 # ── Restore listing fields from S3 ────────────────────────────────────────────

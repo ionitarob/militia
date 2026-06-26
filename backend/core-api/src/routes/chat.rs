@@ -3,6 +3,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use lambda_http::{Body, Error, Request, Response};
 use serde::Deserialize;
 use aws_sdk_bedrockruntime::primitives::Blob;
+use aws_sdk_lambda::primitives::Blob as LambdaBlob;
 
 use crate::AppState;
 use crate::routes::pipeline::require_auth;
@@ -214,14 +215,24 @@ async fn download_s3_doc_owned(
 }
 
 pub fn resolve_media_type<'a>(content_type: Option<&'a str>, nombre: &str) -> &'a str {
+    let n = nombre.to_lowercase();
     match content_type {
         Some(ct) if ct.contains("pdf") => "application/pdf",
-        Some(ct) if ct.contains("word") || ct.contains("docx") => {
+        Some(ct) if ct.contains("opendocument.text") || ct.contains("odt") => {
+            "application/vnd.oasis.opendocument.text"
+        }
+        Some(ct) if ct.contains("openxmlformats") && ct.contains("word") => {
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         }
+        Some(ct) if ct.contains("msword") => "application/msword",
         Some(ct) if ct.contains("text") => "text/plain",
-        _ if nombre.to_lowercase().ends_with(".pdf") => "application/pdf",
-        _ if nombre.to_lowercase().ends_with(".txt") => "text/plain",
+        _ if n.ends_with(".pdf") => "application/pdf",
+        _ if n.ends_with(".odt") => "application/vnd.oasis.opendocument.text",
+        _ if n.ends_with(".docx") => {
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        }
+        _ if n.ends_with(".doc") => "application/msword",
+        _ if n.ends_with(".txt") => "text/plain",
         _ => "application/pdf",
     }
 }
@@ -232,6 +243,200 @@ pub async fn download_s3_doc(state: &AppState, s3_key: &str, nombre: &str, conte
     let bytes = output.body.collect().await.ok()?.into_bytes();
     if bytes.len() > MAX_DOC_BYTES { return None; }
     Some(DocBlob { nombre: nombre.to_string(), media_type: media_type.to_string(), data: bytes.to_vec() })
+}
+
+// ── Lambda-to-Lambda document fallback ───────────────────────────────────────
+
+/// True when the document name matches a Pliego de Prescripciones Técnicas.
+pub fn is_ppt_doc(nombre: &str) -> bool {
+    let n = nombre.to_lowercase();
+    let n = n
+        .replace(['á', 'à', 'â'], "a")
+        .replace(['é', 'è', 'ê'], "e")
+        .replace(['í', 'ì', 'î'], "i")
+        .replace(['ó', 'ò', 'ô'], "o")
+        .replace(['ú', 'ù', 'û'], "u")
+        .replace('ñ', "n");
+    n.contains("prescripcion")
+        || n.contains("ppt")
+        || (n.contains("tecni") && n.contains("pliego"))
+        || (n.contains("tecni") && (n.contains("condicion") || n.contains("clausula")))
+}
+
+/// Scan raw PDF bytes for /URI (...) annotation entries and return unique http/https URLs.
+pub fn extract_pdf_urls(data: &[u8]) -> Vec<String> {
+    const NEEDLE: &[u8] = b"/URI (";
+    let mut urls: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut pos = 0;
+    while pos + NEEDLE.len() < data.len() {
+        match data[pos..].windows(NEEDLE.len()).position(|w| w == NEEDLE) {
+            None => break,
+            Some(offset) => {
+                let start = pos + offset + NEEDLE.len();
+                match data[start..].iter().position(|&b| b == b')') {
+                    None => break,
+                    Some(end) => {
+                        if let Ok(url) = std::str::from_utf8(&data[start..start + end]) {
+                            let url = url.trim().to_string();
+                            if url.starts_with("http") && seen.insert(url.clone()) {
+                                urls.push(url);
+                            }
+                        }
+                        pos = start + end + 1;
+                    }
+                }
+            }
+        }
+    }
+    urls
+}
+
+/// Invoke scraper_fetch `fetch_document` mode to scrape the portal page for a licitacion
+/// on-demand and return the downloaded docs. Used when no docs are in the DB yet.
+pub async fn invoke_scraper_fetch_for_licitacion(
+    state: &AppState,
+    lambda_client: &aws_sdk_lambda::Client,
+    scraper_fetch_arn: &str,
+    licitacion_id: i64,
+) -> Vec<DocBlob> {
+    let external_id: Option<String> = sqlx::query_scalar(
+        "SELECT external_id FROM licitacion WHERE id = $1",
+    )
+    .bind(licitacion_id as i32)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None)
+    .flatten();
+
+    let external_id = match external_id {
+        Some(e) => e,
+        None => {
+            tracing::warn!(licitacion_id, "no external_id — cannot invoke scraper");
+            return Vec::new();
+        }
+    };
+
+    tracing::info!(licitacion_id, %external_id, "invoking scraper_fetch fetch_document");
+
+    let payload = serde_json::json!({
+        "mode": "fetch_document",
+        "external_id": external_id,
+        "licitacion_id": licitacion_id,
+    });
+    let payload_bytes = match serde_json::to_vec(&payload) {
+        Ok(b) => b,
+        Err(e) => { tracing::warn!("serialize error: {e}"); return Vec::new(); }
+    };
+
+    let resp = lambda_client
+        .invoke()
+        .function_name(scraper_fetch_arn)
+        .invocation_type(aws_sdk_lambda::types::InvocationType::RequestResponse)
+        .payload(LambdaBlob::new(payload_bytes))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.function_error().is_some() => {
+            tracing::warn!("scraper_fetch error: {:?}", r.function_error());
+            return Vec::new();
+        }
+        Err(e) => { tracing::warn!("scraper_fetch invoke error: {e:?}"); return Vec::new(); }
+        Ok(_) => {}
+    }
+
+    // Docs are now in DB — re-run fetch
+    fetch_licitacion_docs(state, licitacion_id).await
+}
+
+/// Scan every PDF in `docs` for embedded hyperlinks, invoke scraper_fetch for each URL,
+/// and return any newly-downloaded documents. Capped at 3 URLs.
+pub async fn follow_pdf_links(
+    state: &AppState,
+    lambda_client: &aws_sdk_lambda::Client,
+    scraper_fetch_arn: &str,
+    docs: &[DocBlob],
+    licitacion_id: i64,
+) -> Vec<DocBlob> {
+    const MAX_LINKED: usize = 3;
+
+    let mut all_urls: Vec<String> = Vec::new();
+    let mut seen_urls = std::collections::HashSet::new();
+
+    for doc in docs {
+        if doc.media_type.contains("pdf") {
+            for url in extract_pdf_urls(&doc.data) {
+                if seen_urls.insert(url.clone()) {
+                    all_urls.push(url);
+                }
+            }
+        }
+    }
+
+    tracing::info!(count = all_urls.len(), "PDF hyperlinks found");
+    if all_urls.is_empty() {
+        return Vec::new();
+    }
+    all_urls.truncate(MAX_LINKED);
+
+    let mut linked_docs = Vec::new();
+    for url in &all_urls {
+        tracing::info!(%url, "fetching linked doc via scraper");
+        let payload = serde_json::json!({
+            "mode": "fetch_document_url",
+            "url": url,
+            "licitacion_id": licitacion_id,
+        });
+        let payload_bytes = match serde_json::to_vec(&payload) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+
+        let resp = lambda_client
+            .invoke()
+            .function_name(scraper_fetch_arn)
+            .invocation_type(aws_sdk_lambda::types::InvocationType::RequestResponse)
+            .payload(LambdaBlob::new(payload_bytes))
+            .send()
+            .await;
+
+        let resp = match resp {
+            Ok(r) if r.function_error().is_none() => r,
+            Ok(r) => { tracing::warn!("scraper error: {:?}", r.function_error()); continue; }
+            Err(e) => { tracing::warn!("invoke error: {e:?}"); continue; }
+        };
+
+        let body_bytes = match resp.payload() {
+            Some(b) => b.as_ref().to_vec(),
+            None => continue,
+        };
+
+        let result: serde_json::Value = match serde_json::from_slice(&body_bytes) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let documents = match result.get("documents").and_then(|d| d.as_array()) {
+            Some(d) if !d.is_empty() => d,
+            _ => continue,
+        };
+
+        for doc_info in documents {
+            let s3_key = match doc_info.get("s3_key").and_then(|v| v.as_str()) {
+                Some(k) => k,
+                None => continue,
+            };
+            let nombre = doc_info.get("nombre").and_then(|v| v.as_str()).unwrap_or("Documento enlazado");
+            let ct = doc_info.get("content_type").and_then(|v| v.as_str());
+            if let Some(blob) = download_s3_doc(state, s3_key, nombre, ct).await {
+                tracing::info!(nombre = %blob.nombre, bytes = blob.data.len(), "linked doc added");
+                linked_docs.push(blob);
+            }
+        }
+    }
+
+    linked_docs
 }
 
 pub async fn send(state: Arc<AppState>, event: Request) -> Result<Response<Body>, Error> {

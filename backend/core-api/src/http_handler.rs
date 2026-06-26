@@ -169,6 +169,16 @@ pub async fn handle(state: Arc<AppState>, event: Request) -> Result<Response<Bod
                 return routes::documents::list(state, event, lid).await;
             }
         }
+        (Method::POST, ["licitaciones", id, "documentos"]) => {
+            if let Ok(lid) = id.parse::<i64>() {
+                return routes::documents::upload(state, event, lid).await;
+            }
+        }
+        (Method::DELETE, ["licitaciones", id, "documentos", did]) => {
+            if let (Ok(lid), Ok(d)) = (id.parse::<i64>(), did.parse::<i64>()) {
+                return routes::documents::delete_manual(state, event, lid, d).await;
+            }
+        }
 
         // Notes
         (Method::GET, ["licitaciones", id, "notes"]) => {

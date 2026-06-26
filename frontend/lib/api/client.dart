@@ -549,6 +549,36 @@ class ApiClient {
         .toList();
   }
 
+  Future<Map<String, dynamic>> uploadDocumento(
+    int licitacionId, {
+    required String nombre,
+    required String contentType,
+    int? sizeBytes,
+  }) async {
+    final res = await _http.post(
+      Uri.parse('$_base/licitaciones/$licitacionId/documentos'),
+      headers: {
+        ...await _headers(),
+        'content-type': 'application/json',
+      },
+      body: jsonEncode({
+        'nombre': nombre,
+        'content_type': contentType,
+        if (sizeBytes != null) 'size_bytes': sizeBytes,
+      }),
+    );
+    _check(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  Future<void> deleteDocumento(int licitacionId, int docId) async {
+    final res = await _http.delete(
+      Uri.parse('$_base/licitaciones/$licitacionId/documentos/$docId'),
+      headers: await _headers(),
+    );
+    _check(res);
+  }
+
   // ── Registration ─────────────────────────────────────────────────────────────
 
   Future<int> registerRequest({

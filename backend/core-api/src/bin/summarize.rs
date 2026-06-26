@@ -7,7 +7,10 @@ use aws_sdk_bedrockruntime::primitives::Blob;
 use bytes::Bytes;
 use core_api::{
     build_pool, fetch_secret_string,
-    routes::chat::{fetch_summary_docs, DocBlob},
+    routes::chat::{
+        fetch_summary_docs, follow_pdf_links, invoke_scraper_fetch_for_licitacion,
+        is_ppt_doc, DocBlob,
+    },
     AppState,
 };
 use futures_util::StreamExt;
@@ -61,8 +64,10 @@ async fn main() -> Result<(), Error> {
     let jwt_secret = fetch_secret_string(&sm, &jwt_secret_arn).await?;
 
     let s3_bucket = std::env::var("S3_BUCKET").expect("S3_BUCKET required");
+    let scraper_fetch_arn = std::env::var("SCRAPER_FETCH_ARN").ok();
     let s3_client = aws_sdk_s3::Client::new(&aws_cfg);
     let bedrock = aws_sdk_bedrockruntime::Client::new(&aws_cfg);
+    let lambda_client = aws_sdk_lambda::Client::new(&aws_cfg);
 
     let state = Arc::new(AppState {
         pool,
@@ -76,12 +81,19 @@ async fn main() -> Result<(), Error> {
 
     run_with_streaming_response(service_fn(move |req: Request| {
         let state = Arc::clone(&state);
-        async move { handle(state, req).await }
+        let lambda_client = lambda_client.clone();
+        let scraper_fetch_arn = scraper_fetch_arn.clone();
+        async move { handle(state, lambda_client, scraper_fetch_arn, req).await }
     }))
     .await
 }
 
-async fn handle(state: Arc<AppState>, req: Request) -> Result<Response<BoxBody>, Error> {
+async fn handle(
+    state: Arc<AppState>,
+    lambda_client: aws_sdk_lambda::Client,
+    scraper_fetch_arn: Option<String>,
+    req: Request,
+) -> Result<Response<BoxBody>, Error> {
     // JWT auth
     let auth = req
         .headers()
@@ -106,7 +118,26 @@ async fn handle(state: Arc<AppState>, req: Request) -> Result<Response<BoxBody>,
     let (tx, rx) = mpsc::channel::<Bytes>(128);
 
     tokio::spawn(async move {
-        let docs = fetch_summary_docs(&state, sum_req.licitacion_id).await;
+        let mut docs = fetch_summary_docs(&state, sum_req.licitacion_id).await;
+
+        // Lambda-to-Lambda: if no docs found at all, ask scraper_fetch to download them on-demand
+        if let (true, Some(ref arn)) = (docs.is_empty(), &scraper_fetch_arn) {
+            docs = invoke_scraper_fetch_for_licitacion(
+                &state, &lambda_client, arn, sum_req.licitacion_id,
+            ).await;
+        }
+
+        // PDF hyperlink following: if no PPT found, scan downloaded PDFs for linked documents
+        if let (false, Some(ref arn)) = (docs.iter().any(|d| is_ppt_doc(&d.nombre)), &scraper_fetch_arn) {
+            let linked = follow_pdf_links(
+                &state, &lambda_client, arn, &docs, sum_req.licitacion_id,
+            ).await;
+            if !linked.is_empty() {
+                tracing::info!(count = linked.len(), "appended docs found via PDF hyperlinks");
+                docs.extend(linked);
+            }
+        }
+
         tracing::info!(
             count = docs.len(),
             names = ?docs.iter().map(|d| &d.nombre).collect::<Vec<_>>(),
@@ -115,8 +146,8 @@ async fn handle(state: Arc<AppState>, req: Request) -> Result<Response<BoxBody>,
         );
 
         let mut content: Vec<serde_json::Value> = docs.into_iter().filter_map(|d: DocBlob| {
-            let text = extract_pdf_text(&d.data)?;
-            tracing::info!(nombre = %d.nombre, chars = text.len(), "extracted pdf text");
+            let text = extract_doc_text(&d)?;
+            tracing::info!(nombre = %d.nombre, media_type = %d.media_type, chars = text.len(), "extracted doc text");
             Some(serde_json::json!({
                 "type": "text",
                 "text": format!("=== {} ===\n\n{}", d.nombre, text),
@@ -158,6 +189,7 @@ async fn handle(state: Arc<AppState>, req: Request) -> Result<Response<BoxBody>,
         .body(body)
         .unwrap())
 }
+
 
 async fn stream_summary(
     state: &AppState,
@@ -215,24 +247,90 @@ async fn stream_summary(
     Ok(())
 }
 
-/// Extract readable text from a PDF, capping at 80 000 chars to stay within token budget.
-/// Returns None if the PDF yields no usable text (e.g. scanned image-only PDF).
+const TEXT_CAP: usize = 80_000;
+
+fn extract_doc_text(doc: &DocBlob) -> Option<String> {
+    let mt = doc.media_type.as_str();
+    let raw = if mt.contains("pdf") {
+        extract_pdf_text(&doc.data)
+    } else if mt.contains("opendocument.text") || mt.contains("odt") {
+        extract_zip_xml_text(&doc.data, "content.xml")
+    } else if mt.contains("openxmlformats") && mt.contains("word") {
+        extract_zip_xml_text(&doc.data, "word/document.xml")
+    } else if mt.contains("msword") {
+        extract_binary_text(&doc.data)
+    } else if mt.contains("text/plain") {
+        std::str::from_utf8(&doc.data).ok().map(|s| s.trim().to_string())
+    } else {
+        // Unknown type — try PDF first, then ZIP-XML, then raw text
+        extract_pdf_text(&doc.data)
+            .or_else(|| extract_zip_xml_text(&doc.data, "content.xml"))
+            .or_else(|| extract_zip_xml_text(&doc.data, "word/document.xml"))
+    };
+    let text = raw?;
+    if text.trim().is_empty() { return None; }
+    if text.len() > TEXT_CAP { Some(text[..TEXT_CAP].to_string()) } else { Some(text) }
+}
+
 fn extract_pdf_text(data: &[u8]) -> Option<String> {
     let result = std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem(data));
-    let text = match result {
-        Ok(Ok(t)) => t,
-        _ => return None,
-    };
-    let trimmed = text.trim().to_string();
-    if trimmed.is_empty() {
-        return None;
+    match result {
+        Ok(Ok(t)) if !t.trim().is_empty() => Some(t),
+        _ => None,
     }
-    // Truncate to keep token usage predictable
-    if trimmed.len() > 80_000 {
-        Some(trimmed[..80_000].to_string())
-    } else {
-        Some(trimmed)
+}
+
+/// Extract text from a ZIP-based format (DOCX or ODT) by reading the named XML entry
+/// and stripping all XML tags to get plain text.
+fn extract_zip_xml_text(data: &[u8], entry: &str) -> Option<String> {
+    let cursor = std::io::Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).ok()?;
+    let mut file = archive.by_name(entry).ok()?;
+    use std::io::Read;
+    let mut xml = String::new();
+    file.read_to_string(&mut xml).ok()?;
+    let text = strip_xml_tags(&xml);
+    if text.trim().is_empty() { None } else { Some(text) }
+}
+
+/// Best-effort extraction for old OLE2 .doc files: pull out runs of printable ASCII/Latin.
+fn extract_binary_text(data: &[u8]) -> Option<String> {
+    let mut out = String::new();
+    let mut run = String::new();
+    for &b in data {
+        if b >= 0x20 && b < 0x7f || b >= 0xa0 {
+            run.push(b as char);
+        } else {
+            if run.len() >= 5 {
+                if !out.is_empty() { out.push(' '); }
+                out.push_str(run.trim());
+            }
+            run.clear();
+        }
     }
+    if run.len() >= 5 { out.push_str(run.trim()); }
+    if out.trim().is_empty() { None } else { Some(out) }
+}
+
+fn strip_xml_tags(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() / 2);
+    let mut in_tag = false;
+    let mut last_space = true;
+    for c in s.chars() {
+        match c {
+            '<' => { in_tag = true; }
+            '>' => {
+                in_tag = false;
+                if !last_space { out.push(' '); last_space = true; }
+            }
+            _ if in_tag => {}
+            '\n' | '\r' | '\t' | ' ' => {
+                if !last_space { out.push(' '); last_space = true; }
+            }
+            _ => { out.push(c); last_space = false; }
+        }
+    }
+    out.trim().to_string()
 }
 
 fn sse_bytes(payload: &str) -> Bytes {

@@ -314,7 +314,7 @@ pub async fn update_stage(
     )
     .bind(lic_id)
     .bind(&req.stage)
-    .bind(claims.sub)
+    .bind(claims.sub as i64)
     .execute(&state.pool)
     .await
     .map_err(|e| format!("db history: {e}"))?;
@@ -848,7 +848,10 @@ pub async fn my_licitaciones(
                  WHERE la2.licitacion_id = l.id AND la2.active = TRUE),
                 '[]'::JSON
             )::TEXT                                   AS assignees_json,
-            o.nombre                                  AS organismo_nombre
+            o.nombre                                  AS organismo_nombre,
+            NULL::TEXT                                AS cat1,
+            NULL::TEXT                                AS cat2,
+            NULL::TEXT                                AS cat3
         FROM licitacion l
         JOIN licitacion_assignment la
             ON la.licitacion_id = l.id AND la.assignee_id = $1 AND la.active = TRUE
@@ -937,6 +940,8 @@ pub struct StageHistoryItem {
     pub stage: String,
     pub changed_at: chrono::DateTime<chrono::Utc>,
     pub user_nombre: Option<String>,
+    pub motivo_perdida: Option<String>,
+    pub motivo_perdida_texto: Option<String>,
 }
 
 pub async fn get_stage_history(
@@ -945,9 +950,12 @@ pub async fn get_stage_history(
     lic_id: i64,
 ) -> Result<Response<Body>, Error> {
     let rows = sqlx::query_as::<_, StageHistoryItem>(
-        "SELECT h.id, h.stage, h.changed_at, u.nombre AS user_nombre
+        "SELECT h.id, h.stage, h.changed_at, u.nombre AS user_nombre,
+                CASE WHEN h.stage IN ('rechazada', 'perdida') THEN l.motivo_perdida      ELSE NULL END AS motivo_perdida,
+                CASE WHEN h.stage IN ('rechazada', 'perdida') THEN l.motivo_perdida_texto ELSE NULL END AS motivo_perdida_texto
          FROM licitacion_stage_history h
-         LEFT JOIN app_user u ON u.id = h.changed_by
+         LEFT JOIN app_user u   ON u.id  = h.changed_by
+         LEFT JOIN licitacion l ON l.id  = h.licitacion_id
          WHERE h.licitacion_id = $1
          ORDER BY h.changed_at DESC",
     )

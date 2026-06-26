@@ -71,6 +71,13 @@ export class InfraStack extends cdk.Stack {
       subnets: [{ subnetType: ec2.SubnetType.PRIVATE_ISOLATED }],
     });
 
+    // Lambda interface endpoint: allows SummarizeLambda (isolated subnet) to invoke
+    // ScraperFetchLambda synchronously for on-demand document fetching.
+    vpc.addInterfaceEndpoint('LambdaEndpoint', {
+      service: ec2.InterfaceVpcEndpointAwsService.LAMBDA,
+      subnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+    });
+
     // ── 3. Aurora Serverless v2 (PostgreSQL 16) ───────────────────────────────
     // Scales from 0.5 ACUs (idle) to 8 ACUs (peak) automatically.
     // Costs ~$0/month when unused; no provisioned capacity to pay for.
@@ -189,7 +196,7 @@ export class InfraStack extends cdk.Stack {
       },
       architecture: cdk.aws_lambda.Architecture.ARM_64,
       memorySize: 512,
-      timeout: cdk.Duration.seconds(90),
+      timeout: cdk.Duration.seconds(120),
       vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
       environment: {
@@ -197,6 +204,7 @@ export class InfraStack extends cdk.Stack {
         JWT_SECRET_ARN: jwtSecret.secretArn,
         RUST_LOG:       'info',
         S3_BUCKET:      `imliti-scrapes-${this.account}`,
+        // Set after scraperFetchLambda is defined below — injected via addEnvironment
       },
     });
 
@@ -400,6 +408,14 @@ export class InfraStack extends cdk.Stack {
       actions: ['lambda:InvokeFunction'],
       resources: [`arn:aws:lambda:${this.region}:${this.account}:function:*`],
     }));
+
+    // SummarizeLambda and ChatStreamLambda invoke ScraperFetchLambda on-demand:
+    // (1) when no docs in DB yet, (2) to follow PDF hyperlinks for the PPT.
+    // Both are in the isolated subnet — the Lambda VPC endpoint above provides access.
+    summarizeLambda.addEnvironment('SCRAPER_FETCH_ARN', scraperFetchLambda.functionArn);
+    scraperFetchLambda.grantInvoke(summarizeLambda);
+    chatStreamLambda.addEnvironment('SCRAPER_FETCH_ARN', scraperFetchLambda.functionArn);
+    scraperFetchLambda.grantInvoke(chatStreamLambda);
 
     // ── 9. scraper_write Lambda (in VPC — needs RDS access) ──────────────────
     // Triggered by S3 ObjectCreated events from scraper_fetch.

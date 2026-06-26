@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart' show Material, InkWell;
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -70,19 +71,6 @@ const _filterCategories = [
       _FO('250K – 500K', '250-500k'),
       _FO('500K – 1M', '500k-1m'),
       _FO('> 1M', 'gt1m'),
-    ],
-  ),
-  _FC(
-    key: 'ingramEstado',
-    title: 'Estado Ingram',
-    icon: CupertinoIcons.briefcase_fill,
-    color: Color(0xFF7C3AED),
-    options: [
-      _FO('Pend. solicitud a división', 'PENDIENTE SOLICITUD DE COTIZACIÓN A LA DIVISIÓN'),
-      _FO('Cotiz. solicitada a división', 'COTIZACIÓN SOLICITADA (A LA DIVISIÓN)'),
-      _FO('Pend. envío a cliente', 'PENDIENTE ENVÍO DE COTIZACIÓN A CLIENTE'),
-      _FO('Enviada a cliente (X4A)', 'COTIZACIÓN ENVIADA A CLIENTE - X4A'),
-      _FO('Rechazado', 'RECHAZADO'),
     ],
   ),
   _FC(
@@ -1102,6 +1090,7 @@ class _FilterSheetState extends State<_FilterSheet> {
 
     final result = await showCupertinoModalPopup<Set<String>>(
       context: context,
+      barrierDismissible: false,
       builder: (ctx) => _MultiSelectCategoryPicker(
         title: cat.title,
         options: options,
@@ -1541,51 +1530,53 @@ class _MultiSelectCategoryPickerState extends State<_MultiSelectCategoryPicker> 
               itemBuilder: (context, index) {
                 final o = filteredOptions[index];
                 final isSelected = _tempSelected.contains(o.value);
-                return GestureDetector(
-                  onTap: () {
-                    setState(() {
-                      if (isSelected) {
-                        _tempSelected.remove(o.value);
-                      } else {
-                        if (widget.title == 'Asignación') {
-                          if (o.value == 'no') {
-                            _tempSelected.clear();
-                          } else {
-                            _tempSelected.remove('no');
+                return Material(
+                  color: const Color(0x00000000),
+                  child: InkWell(
+                    onTap: () {
+                      setState(() {
+                        if (isSelected) {
+                          _tempSelected.remove(o.value);
+                        } else {
+                          if (widget.title == 'Asignación') {
+                            if (o.value == 'no') {
+                              _tempSelected.clear();
+                            } else {
+                              _tempSelected.remove('no');
+                            }
                           }
+                          _tempSelected.add(o.value);
                         }
-                        _tempSelected.add(o.value);
-                      }
-                    });
-                  },
-                  behavior: HitTestBehavior.opaque,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-                    decoration: const BoxDecoration(
-                      border: Border(
-                        bottom: BorderSide(color: _border, width: 0.5),
+                      });
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+                      decoration: const BoxDecoration(
+                        border: Border(
+                          bottom: BorderSide(color: _border, width: 0.5),
+                        ),
                       ),
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            o.label,
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-                              color: isSelected ? _blue : _ink,
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              o.label,
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                                color: isSelected ? _blue : _ink,
+                              ),
                             ),
                           ),
-                        ),
-                        Icon(
-                          isSelected
-                              ? CupertinoIcons.checkmark_square_fill
-                              : CupertinoIcons.square,
-                          color: isSelected ? _blue : _muted,
-                          size: 20,
-                        ),
-                      ],
+                          Icon(
+                            isSelected
+                                ? CupertinoIcons.checkmark_square_fill
+                                : CupertinoIcons.square,
+                            color: isSelected ? _blue : _muted,
+                            size: 20,
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 );

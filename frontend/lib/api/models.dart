@@ -281,6 +281,9 @@ class Licitacion {
   final String? motivoPerdida;
   final String? motivoPerdidaTexto;
   final String? organismoNombre;
+  final String? cat1;
+  final String? cat2;
+  final String? cat3;
 
   const Licitacion({
     required this.id,
@@ -313,6 +316,9 @@ class Licitacion {
     this.motivoPerdida,
     this.motivoPerdidaTexto,
     this.organismoNombre,
+    this.cat1,
+    this.cat2,
+    this.cat3,
   });
 
   // Convenience: first assignee's name (for list display)
@@ -355,6 +361,9 @@ class Licitacion {
         motivoPerdida: j['motivo_perdida'] as String?,
         motivoPerdidaTexto: j['motivo_perdida_texto'] as String?,
         organismoNombre: j['organismo_nombre'] as String?,
+        cat1: j['cat1'] as String?,
+        cat2: j['cat2'] as String?,
+        cat3: j['cat3'] as String?,
       );
 
   Licitacion copyWith({
@@ -857,6 +866,7 @@ class LicitacionDocumento {
   final String url;
   final String? contentType;
   final int? sizeBytes;
+  final bool isManual;
 
   const LicitacionDocumento({
     required this.id,
@@ -864,6 +874,7 @@ class LicitacionDocumento {
     required this.url,
     this.contentType,
     this.sizeBytes,
+    this.isManual = false,
   });
 
   factory LicitacionDocumento.fromJson(Map<String, dynamic> j) =>
@@ -873,6 +884,7 @@ class LicitacionDocumento {
         url:         j['url'] as String,
         contentType: j['content_type'] as String?,
         sizeBytes:   j['size_bytes'] as int?,
+        isManual:    j['is_manual'] as bool? ?? false,
       );
 }
 
@@ -935,12 +947,16 @@ class StageHistoryItem {
   final String stage;
   final String changedAt;
   final String? userNombre;
+  final String? motivoPerdida;
+  final String? motivoPerdidaTexto;
 
   const StageHistoryItem({
     required this.id,
     required this.stage,
     required this.changedAt,
     this.userNombre,
+    this.motivoPerdida,
+    this.motivoPerdidaTexto,
   });
 
   factory StageHistoryItem.fromJson(Map<String, dynamic> j) => StageHistoryItem(
@@ -948,6 +964,8 @@ class StageHistoryItem {
         stage: j['stage'] as String,
         changedAt: j['changed_at'] as String,
         userNombre: j['user_nombre'] as String?,
+        motivoPerdida: j['motivo_perdida'] as String?,
+        motivoPerdidaTexto: j['motivo_perdida_texto'] as String?,
       );
 }
 

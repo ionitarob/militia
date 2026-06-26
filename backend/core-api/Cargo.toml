@@ -35,6 +35,7 @@ aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-sdk-secretsmanager = "1"
 aws-sdk-s3 = "1"
 aws-sdk-bedrockruntime = "1"
+aws-sdk-lambda = "1"
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder"] }
 
 # Serialisation
@@ -52,3 +53,4 @@ uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 pdf-extract = "0.10.0"
+zip = { version = "2", default-features = false, features = ["deflate"] }

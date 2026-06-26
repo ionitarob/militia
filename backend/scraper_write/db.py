@@ -106,15 +106,16 @@ def upsert_licitacion(cur, rec: dict) -> Optional[int]:
                 cur.execute(
                     """
                     INSERT INTO licitacion_documento
-                        (licitacion_id, nombre, s3_key, content_type, size_bytes)
-                    VALUES (%s, %s, %s, %s, %s)
+                        (licitacion_id, nombre, s3_key, content_type, size_bytes, source_url)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (licitacion_id, s3_key) DO UPDATE SET
                         nombre       = EXCLUDED.nombre,
                         content_type = EXCLUDED.content_type,
-                        size_bytes   = EXCLUDED.size_bytes
+                        size_bytes   = EXCLUDED.size_bytes,
+                        source_url   = COALESCE(EXCLUDED.source_url, licitacion_documento.source_url)
                     """,
                     (licitacion_id, doc["nombre"], doc["s3_key"],
-                     doc.get("content_type"), doc.get("size_bytes")),
+                     doc.get("content_type"), doc.get("size_bytes"), doc.get("source_url")),
                 )
         return licitacion_id
 
@@ -222,15 +223,16 @@ def upsert_licitacion(cur, rec: dict) -> Optional[int]:
         for doc in documents:
             cur.execute(
                 """
-                INSERT INTO licitacion_documento (licitacion_id, nombre, s3_key, content_type, size_bytes)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO licitacion_documento (licitacion_id, nombre, s3_key, content_type, size_bytes, source_url)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT (licitacion_id, s3_key) DO UPDATE SET
                     nombre       = EXCLUDED.nombre,
                     content_type = EXCLUDED.content_type,
-                    size_bytes   = EXCLUDED.size_bytes
+                    size_bytes   = EXCLUDED.size_bytes,
+                    source_url   = COALESCE(EXCLUDED.source_url, licitacion_documento.source_url)
                 """,
                 (licitacion_id, doc["nombre"], doc["s3_key"],
-                 doc.get("content_type"), doc.get("size_bytes")),
+                 doc.get("content_type"), doc.get("size_bytes"), doc.get("source_url")),
             )
 
     return licitacion_id

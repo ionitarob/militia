@@ -164,6 +164,7 @@ class _LicitacionDetailScreenState extends State<LicitacionDetailScreen> {
   bool _loadingDocs = true;
   bool _loadingAdjuntos = true;
   bool _uploadingAdjunto = false;
+  bool _uploadingDocumento = false;
 
   Map<String, ClienteCotizacion> _cotizaciones = {};
   bool _loadingCotizaciones = true;
@@ -362,6 +363,81 @@ class _LicitacionDetailScreenState extends State<LicitacionDetailScreen> {
     }
   }
 
+  Future<void> _uploadDocumento(
+    String nombre,
+    String contentType,
+    Uint8List bytes,
+  ) async {
+    if (_uploadingDocumento) return;
+    setState(() => _uploadingDocumento = true);
+    try {
+      final result = await ApiClient().uploadDocumento(
+        _lic.id,
+        nombre: nombre,
+        contentType: contentType,
+        sizeBytes: bytes.length,
+      );
+      final uploadUrl = result['upload_url'] as String;
+      final uploadRes = await http.put(
+        Uri.parse(uploadUrl),
+        headers: {'content-type': contentType},
+        body: bytes,
+      );
+      if (uploadRes.statusCode != 200)
+        throw Exception('Upload failed: ${uploadRes.statusCode}');
+      await _loadDocumentos();
+    } catch (e) {
+      if (!mounted) return;
+      _showError(e.toString());
+    } finally {
+      if (mounted) setState(() => _uploadingDocumento = false);
+    }
+  }
+
+  Future<void> _deleteDocumento(int docId) async {
+    final confirmed = await showCupertinoDialog<bool>(
+      context: context,
+      builder: (ctx) => CupertinoAlertDialog(
+        title: const Text('Eliminar documento'),
+        content: const Text('Esta acción no se puede deshacer.'),
+        actions: [
+          CupertinoDialogAction(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          CupertinoDialogAction(
+            isDestructiveAction: true,
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await ApiClient().deleteDocumento(_lic.id, docId);
+      if (mounted) {
+        setState(() => _docs = _docs.where((d) => d.id != docId).toList());
+        HapticFeedback.lightImpact();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      _showError(e.toString());
+    }
+  }
+
+  Future<void> _pickAndUploadDocumento() async {
+    final result = await FilePicker.platform.pickFiles(
+      withData: true,
+      allowMultiple: false,
+    );
+    if (result == null || result.files.isEmpty) return;
+    final file = result.files.first;
+    if (file.bytes == null) return;
+    final ct = _mimeFromName(file.name);
+    await _uploadDocumento(file.name, ct, file.bytes!);
+  }
+
   Future<void> _loadCotizaciones() async {
     try {
       final list = await ApiClient().getClienteCotizaciones(_lic.id);
@@ -459,7 +535,25 @@ class _LicitacionDetailScreenState extends State<LicitacionDetailScreen> {
   Future<void> _onRechazar(bool rechazada, String? motivo) async {
     try {
       final newStage = rechazada ? 'rechazada' : 'en_proceso';
-      await ApiClient().updateStage(_lic.id, newStage);
+      String? motivoPerdida;
+      String? motivoPerdidaTexto;
+      if (rechazada && motivo != null) {
+        if (motivo.contains('fabricante')) {
+          motivoPerdida = 'fabricante';
+        } else {
+          motivoPerdida = 'otro';
+          final colonIdx = motivo.indexOf(': ');
+          if (colonIdx >= 0) {
+            motivoPerdidaTexto = motivo.substring(colonIdx + 2).trim();
+          }
+        }
+      }
+      await ApiClient().updateStage(
+        _lic.id,
+        newStage,
+        motivoPerdida: motivoPerdida,
+        motivoPerdidaTexto: motivoPerdidaTexto,
+      );
       if (mounted) {
         setState(() {
           _lic = _lic.copyWith(pipelineStage: newStage);
@@ -538,6 +632,8 @@ class _LicitacionDetailScreenState extends State<LicitacionDetailScreen> {
                                 docs: _docs,
                                 loadingDocs: _loadingDocs,
                                 adjudicacion: _adjudicacion,
+                                onUploadDoc: _pickAndUploadDocumento,
+                                onDeleteDoc: _deleteDocumento,
                               ),
                             ),
                             Container(width: 1, color: _border),
@@ -552,6 +648,8 @@ class _LicitacionDetailScreenState extends State<LicitacionDetailScreen> {
                               lic: _lic,
                               docs: _docs,
                               loadingDocs: _loadingDocs,
+                              onUploadDoc: _pickAndUploadDocumento,
+                              onDeleteDoc: _deleteDocumento,
                             ),
                             Container(height: 1, color: _border),
                             _buildRightPanel(scroll: false),
@@ -959,6 +1057,27 @@ class _LicitacionDetailScreenState extends State<LicitacionDetailScreen> {
                                           ),
                                         ),
                                       ],
+                                      if (_stageHistory[i].motivoPerdida != null) ...[
+                                        const SizedBox(height: 4),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            color: const Color(0xFFFEF2F2),
+                                            borderRadius: BorderRadius.circular(6),
+                                          ),
+                                          child: Text(
+                                            _stageHistory[i].motivoPerdida == 'fabricante'
+                                                ? 'Ingram no trabaja con este fabricante'
+                                                : _stageHistory[i].motivoPerdidaTexto != null
+                                                    ? 'Otro: ${_stageHistory[i].motivoPerdidaTexto}'
+                                                    : 'Otro motivo',
+                                            style: const TextStyle(
+                                              fontSize: 11,
+                                              color: Color(0xFFDC2626),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ],
                                   ),
                                 ),
@@ -1194,12 +1313,16 @@ class _LeftPanel extends StatelessWidget {
   final List<LicitacionDocumento> docs;
   final bool loadingDocs;
   final AdjudicacionResumen? adjudicacion;
+  final VoidCallback? onUploadDoc;
+  final void Function(int docId)? onDeleteDoc;
 
   const _LeftPanel({
     required this.lic,
     this.docs = const [],
     this.loadingDocs = false,
     this.adjudicacion,
+    this.onUploadDoc,
+    this.onDeleteDoc,
   });
 
   @override
@@ -1414,6 +1537,43 @@ class _LeftPanel extends StatelessWidget {
             ],
           ),
 
+          // ── Área tecnológica ────────────────────────────────────
+          if (lic.cat1 != null || lic.cat2 != null || lic.cat3 != null) ...[
+            const SizedBox(height: 10),
+            _DataCard(
+              children: [
+                _SectionHeader(label: 'Área tecnológica'),
+                if (lic.cat1 != null) ...[
+                  _divider(),
+                  _DataRow(
+                    label: 'CAT1',
+                    value: lic.cat1!,
+                    icon: CupertinoIcons.layers_fill,
+                    iconColor: const Color(0xFF0369A1),
+                  ),
+                ],
+                if (lic.cat2 != null) ...[
+                  _divider(),
+                  _DataRow(
+                    label: 'CAT2',
+                    value: lic.cat2!,
+                    icon: CupertinoIcons.layers_alt_fill,
+                    iconColor: const Color(0xFF0369A1),
+                  ),
+                ],
+                if (lic.cat3 != null) ...[
+                  _divider(),
+                  _DataRow(
+                    label: 'CAT3',
+                    value: lic.cat3!,
+                    icon: CupertinoIcons.tag_fill,
+                    iconColor: const Color(0xFF6D28D9),
+                  ),
+                ],
+              ],
+            ),
+          ],
+
           // ── Criterios de adjudicación ───────────────────────────
           if (lic.puntosPrecio != null ||
               lic.puntosMejoras != null ||
@@ -1508,15 +1668,51 @@ class _LeftPanel extends StatelessWidget {
           ],
 
           // ── Documentos adjuntos ─────────────────────────────────
-          if (loadingDocs || docs.isNotEmpty) ...[
+          if (loadingDocs || docs.isNotEmpty || onUploadDoc != null) ...[
             const SizedBox(height: 10),
             _DataCard(
               children: [
-                _SectionHeader(label: 'Archivos adjuntos'),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+                  child: Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Archivos adjuntos',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: _muted,
+                            letterSpacing: 0.4,
+                          ),
+                        ),
+                      ),
+                      if (onUploadDoc != null)
+                        CupertinoButton(
+                          padding: EdgeInsets.zero,
+                          minimumSize: Size.zero,
+                          onPressed: onUploadDoc,
+                          child: const Icon(
+                            CupertinoIcons.plus_circle,
+                            size: 18,
+                            color: _blue,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
                 if (loadingDocs)
                   const Padding(
                     padding: EdgeInsets.all(16),
                     child: Center(child: CupertinoActivityIndicator()),
+                  )
+                else if (docs.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                    child: Text(
+                      'Sin documentos. Sube uno con +',
+                      style: const TextStyle(fontSize: 12, color: _muted),
+                    ),
                   )
                 else
                   ...List.generate(docs.length, (i) {
@@ -1526,7 +1722,7 @@ class _LeftPanel extends StatelessWidget {
                         doc.nombre.toLowerCase().endsWith('.pdf');
                     return Column(
                       children: [
-                        if (i > 0) _divider(),
+                        _divider(),
                         Padding(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 16,
@@ -1538,17 +1734,23 @@ class _LeftPanel extends StatelessWidget {
                                 width: 30,
                                 height: 30,
                                 decoration: BoxDecoration(
-                                  color: isPdf
-                                      ? _red.withValues(alpha: 0.08)
-                                      : _blue.withValues(alpha: 0.08),
+                                  color: doc.isManual
+                                      ? const Color(0xFF7C3AED).withValues(alpha: 0.08)
+                                      : isPdf
+                                          ? _red.withValues(alpha: 0.08)
+                                          : _blue.withValues(alpha: 0.08),
                                   borderRadius: BorderRadius.circular(6),
                                 ),
                                 child: Icon(
-                                  isPdf
-                                      ? CupertinoIcons.doc_fill
-                                      : CupertinoIcons.doc_text_fill,
+                                  doc.isManual
+                                      ? CupertinoIcons.arrow_up_doc_fill
+                                      : isPdf
+                                          ? CupertinoIcons.doc_fill
+                                          : CupertinoIcons.doc_text_fill,
                                   size: 15,
-                                  color: isPdf ? _red : _blue,
+                                  color: doc.isManual
+                                      ? const Color(0xFF7C3AED)
+                                      : isPdf ? _red : _blue,
                                 ),
                               ),
                               const SizedBox(width: 10),
@@ -1596,6 +1798,17 @@ class _LeftPanel extends StatelessWidget {
                                   color: _muted,
                                 ),
                               ),
+                              if (doc.isManual && onDeleteDoc != null)
+                                CupertinoButton(
+                                  padding: EdgeInsets.zero,
+                                  minimumSize: Size.zero,
+                                  onPressed: () => onDeleteDoc!(doc.id),
+                                  child: const Icon(
+                                    CupertinoIcons.trash,
+                                    size: 15,
+                                    color: _red,
+                                  ),
+                                ),
                             ],
                           ),
                         ),

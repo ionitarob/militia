@@ -1,0 +1,2 @@
+ALTER TABLE licitacion_documento
+    ADD COLUMN IF NOT EXISTS is_manual BOOLEAN NOT NULL DEFAULT FALSE;

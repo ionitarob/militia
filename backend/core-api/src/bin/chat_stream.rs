@@ -14,7 +14,8 @@ use bytes::Bytes;
 use core_api::{
     build_pool, fetch_secret_string,
     routes::chat::{
-        create_session, execute_tool, fetch_licitacion_docs, load_history, save_message,
+        create_session, execute_tool, fetch_licitacion_docs, follow_pdf_links,
+        invoke_scraper_fetch_for_licitacion, is_ppt_doc, load_history, save_message,
         tool_defs, DocBlob, MODEL_ID, SYSTEM_PROMPT,
     },
     AppState,
@@ -57,8 +58,10 @@ async fn main() -> Result<(), Error> {
     let jwt_secret = fetch_secret_string(&sm, &jwt_secret_arn).await?;
 
     let s3_bucket = std::env::var("S3_BUCKET").expect("S3_BUCKET required");
+    let scraper_fetch_arn = std::env::var("SCRAPER_FETCH_ARN").ok();
     let s3_client = aws_sdk_s3::Client::new(&aws_cfg);
     let bedrock = aws_sdk_bedrockruntime::Client::new(&aws_cfg);
+    let lambda_client = aws_sdk_lambda::Client::new(&aws_cfg);
 
     let state = Arc::new(AppState {
         pool,
@@ -72,14 +75,21 @@ async fn main() -> Result<(), Error> {
 
     run_with_streaming_response(service_fn(move |req: Request| {
         let state = Arc::clone(&state);
-        async move { handle(state, req).await }
+        let lambda_client = lambda_client.clone();
+        let scraper_fetch_arn = scraper_fetch_arn.clone();
+        async move { handle(state, lambda_client, scraper_fetch_arn, req).await }
     }))
     .await
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
 
-async fn handle(state: Arc<AppState>, req: Request) -> Result<Response<BoxBody>, Error> {
+async fn handle(
+    state: Arc<AppState>,
+    lambda_client: aws_sdk_lambda::Client,
+    scraper_fetch_arn: Option<String>,
+    req: Request,
+) -> Result<Response<BoxBody>, Error> {
     // JWT auth
     let auth = req
         .headers()
@@ -130,7 +140,21 @@ async fn handle(state: Arc<AppState>, req: Request) -> Result<Response<BoxBody>,
     let mut messages = load_history(&state.pool, session_id).await?;
 
     if let Some(lic_id) = chat_req.licitacion_id {
-        let docs = fetch_licitacion_docs(&state, lic_id).await;
+        let mut docs = fetch_licitacion_docs(&state, lic_id).await;
+
+        // Lambda-to-Lambda fallback: fetch docs on-demand if none in DB
+        if let (true, Some(ref arn)) = (docs.is_empty(), &scraper_fetch_arn) {
+            docs = invoke_scraper_fetch_for_licitacion(&state, &lambda_client, arn, lic_id).await;
+        }
+
+        // PDF hyperlink following: if PPT missing, scan embedded links
+        if let (false, Some(ref arn)) = (docs.iter().any(|d| is_ppt_doc(&d.nombre)), &scraper_fetch_arn) {
+            let linked = follow_pdf_links(&state, &lambda_client, arn, &docs, lic_id).await;
+            if !linked.is_empty() {
+                docs.extend(linked);
+            }
+        }
+
         if !docs.is_empty() {
             let mut content: Vec<serde_json::Value> = docs.into_iter().map(|d: DocBlob| {
                 serde_json::json!({
