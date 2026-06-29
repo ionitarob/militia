@@ -1,4 +1,5 @@
 use sqlx::PgPool;
+use azure_storage_blobs::prelude::BlobServiceClient;
 use lambda_http::Error;
 
 pub mod auth;
@@ -10,36 +11,25 @@ pub struct AppState {
     pub jwt_secret: String,
     pub smtp_user: String,
     pub smtp_pass: String,
-    pub s3_client: aws_sdk_s3::Client,
-    pub s3_bucket: String,
-    pub bedrock: aws_sdk_bedrockruntime::Client,
+    /// Azure Blob Storage service client (replaces aws_sdk_s3::Client)
+    pub blob_client: BlobServiceClient,
+    pub blob_container: String,
+    /// reqwest client for Azure OpenAI API and scraper HTTP calls
+    pub http_client: reqwest::Client,
+    pub azure_openai_key: String,
+    pub azure_openai_endpoint: String,
+    /// HTTP URL of the scraper_fetch service (replaces Lambda ARN)
+    pub scraper_fetch_url: Option<String>,
 }
 
-pub async fn build_pool(sm: &aws_sdk_secretsmanager::Client) -> Result<PgPool, Error> {
-    let secret_arn = std::env::var("DB_SECRET_ARN").expect("DB_SECRET_ARN env var is required");
-    let raw = fetch_secret_string(sm, &secret_arn).await?;
-    let creds: serde_json::Value = serde_json::from_str(&raw).expect("DB secret is not valid JSON");
-    let url = format!(
-        "postgresql://{}:{}@{}:{}/{}",
-        creds["username"].as_str().unwrap_or("postgres"),
-        creds["password"].as_str().unwrap_or(""),
-        creds["host"].as_str().unwrap_or("localhost"),
-        creds["port"].as_u64().unwrap_or(5432),
-        creds["dbname"].as_str().unwrap_or("imliti"),
-    );
-    let pool = PgPool::connect(&url).await.expect("Failed to connect to PostgreSQL");
+pub async fn build_pool(db_url: &str) -> Result<PgPool, Error> {
+    let pool = PgPool::connect(db_url)
+        .await
+        .map_err(|e| format!("DB connect failed: {e}"))?;
     Ok(pool)
 }
 
-pub async fn fetch_secret_string(
-    sm: &aws_sdk_secretsmanager::Client,
-    arn: &str,
-) -> Result<String, Error> {
-    let resp = sm
-        .get_secret_value()
-        .secret_id(arn)
-        .send()
-        .await
-        .map_err(|e| format!("SecretsManager error: {e}"))?;
-    Ok(resp.secret_string().unwrap_or_default().to_string())
+pub fn build_blob_client(account: &str, key: &str) -> BlobServiceClient {
+    let credentials = azure_storage::StorageCredentials::access_key(account.to_string(), key.to_string());
+    BlobServiceClient::new(account, credentials)
 }

@@ -8,7 +8,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 const _manifestUrl =
-    'https://imliti-scrapes-340303438174.s3.eu-west-3.amazonaws.com/app/latest.json';
+    'https://imlitistorage.blob.core.windows.net/app/latest.json';
 
 class UpdateInfo {
   final String version;

@@ -1,8 +1,8 @@
-use aws_sdk_s3::presigning::PresigningConfig;
+use azure_storage::prelude::*;
 use lambda_http::{Body, Error, Request, Response};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::time::Duration;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{http_handler::ok_json_status, AppState};
@@ -42,6 +42,36 @@ fn parse_body<T: serde::de::DeserializeOwned>(event: &Request) -> Result<T, Stri
     serde_json::from_slice(&raw).map_err(|e| e.to_string())
 }
 
+async fn blob_download_url(state: &AppState, blob_key: &str) -> Result<String, String> {
+    let blob = state.blob_client
+        .container_client(&state.blob_container)
+        .blob_client(blob_key);
+
+    let expiry = OffsetDateTime::now_utc() + time::Duration::hours(12);
+    let permissions = BlobSasPermissions { read: true, ..Default::default() };
+    let sas = blob.shared_access_signature(permissions, expiry)
+        .await
+        .map_err(|e| format!("SAS error: {e}"))?;
+    blob.generate_signed_blob_url(&sas)
+        .map_err(|e| format!("URL gen error: {e}"))
+        .map(|u| u.to_string())
+}
+
+async fn blob_upload_url(state: &AppState, blob_key: &str, content_type: &str) -> Result<String, String> {
+    let blob = state.blob_client
+        .container_client(&state.blob_container)
+        .blob_client(blob_key);
+
+    let expiry = OffsetDateTime::now_utc() + time::Duration::minutes(15);
+    let permissions = BlobSasPermissions { write: true, create: true, ..Default::default() };
+    let sas = blob.shared_access_signature(permissions, expiry)
+        .await
+        .map_err(|e| format!("SAS error: {e}"))?;
+    blob.generate_signed_blob_url(&sas)
+        .map_err(|e| format!("URL gen error: {e}"))
+        .map(|u| u.to_string())
+}
+
 pub async fn list(
     state: Arc<AppState>,
     _event: Request,
@@ -58,24 +88,15 @@ pub async fn list(
     .await
     .map_err(|e| format!("DB error: {e}"))?;
 
-    let presign_cfg = PresigningConfig::expires_in(Duration::from_secs(43200)) // 12 h
-        .map_err(|e| format!("presign config: {e}"))?;
-
     let mut adjuntos = Vec::new();
     for row in rows {
-        let presigned = state
-            .s3_client
-            .get_object()
-            .bucket(&state.s3_bucket)
-            .key(&row.s3_key)
-            .presigned(presign_cfg.clone())
+        let url = blob_download_url(&state, &row.s3_key)
             .await
-            .map_err(|e| format!("presign error: {e}"))?;
-
+            .unwrap_or_default();
         adjuntos.push(AdjuntoResponse {
             id: row.id,
             nombre: row.nombre,
-            url: presigned.uri().to_string(),
+            url,
             content_type: row.content_type,
             size_bytes: row.size_bytes,
         });
@@ -101,7 +122,7 @@ pub async fn create(
         .chars()
         .map(|c| if c.is_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
         .collect::<String>();
-    let s3_key = format!("cotizaciones/{}/{}_{}",
+    let blob_key = format!("cotizaciones/{}/{}_{}",
         licitacion_id, Uuid::new_v4().simple(), safe_name);
 
     let id: i32 = sqlx::query_scalar(
@@ -111,7 +132,7 @@ pub async fn create(
     )
     .bind(licitacion_id as i32)
     .bind(&req.nombre)
-    .bind(&s3_key)
+    .bind(&blob_key)
     .bind(&req.content_type)
     .bind(req.size_bytes)
     .fetch_one(&state.pool)
@@ -121,20 +142,9 @@ pub async fn create(
     let desc = format!("Archivo adjunto subido: {}", req.nombre);
     let _ = crate::routes::pipeline::log_change(&state.pool, licitacion_id, claims.sub, &desc).await;
 
-    let presign_cfg = PresigningConfig::expires_in(Duration::from_secs(300))
-        .map_err(|e| format!("presign config: {e}"))?;
-
-    let upload_url = state
-        .s3_client
-        .put_object()
-        .bucket(&state.s3_bucket)
-        .key(&s3_key)
-        .content_type(&req.content_type)
-        .presigned(presign_cfg)
+    let upload_url = blob_upload_url(&state, &blob_key, &req.content_type)
         .await
-        .map_err(|e| format!("presign error: {e}"))?
-        .uri()
-        .to_string();
+        .map_err(|e| format!("presign error: {e}"))?;
 
     ok_json_status(
         201,
@@ -162,7 +172,7 @@ pub async fn delete(
     .await
     .unwrap_or(None);
 
-    let s3_key: Option<String> = sqlx::query_scalar(
+    let blob_key: Option<String> = sqlx::query_scalar(
         "SELECT s3_key FROM cotizacion_adjunto WHERE id = $1 AND licitacion_id = $2",
     )
     .bind(adjunto_id as i32)
@@ -171,17 +181,15 @@ pub async fn delete(
     .await
     .map_err(|e| format!("DB error: {e}"))?;
 
-    let key = match s3_key {
+    let key = match blob_key {
         Some(k) => k,
         None => return ok_json_status(404, r#"{"error":"not found"}"#),
     };
 
-    let _ = state
-        .s3_client
-        .delete_object()
-        .bucket(&state.s3_bucket)
-        .key(&key)
-        .send()
+    let _ = state.blob_client
+        .container_client(&state.blob_container)
+        .blob_client(&key)
+        .delete()
         .await;
 
     sqlx::query("DELETE FROM cotizacion_adjunto WHERE id = $1")

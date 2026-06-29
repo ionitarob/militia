@@ -19,9 +19,10 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: eu-west-3
-  S3_BUCKET: imliti-scrapes-340303438174
   FLUTTER_BASE: https://storage.googleapis.com/flutter_infra_release/releases
+  AZURE_STORAGE_ACCOUNT: imlitistorage
+  AZURE_CONTAINER: app
+  BLOB_BASE_URL: https://imlitistorage.blob.core.windows.net/app
 
 jobs:
   # ═════════════════════════════════════════════════════════════════════════════
@@ -85,22 +86,25 @@ jobs:
           zip -r --symlinks /tmp/imliti-${{ env.VERSION }}-macos.zip "$APP_BUNDLE"
           echo "ZIP_SIZE=$(du -sh /tmp/imliti-${{ env.VERSION }}-macos.zip | cut -f1)" >> "$GITHUB_ENV"
 
-      - name: Upload to S3
+      - name: Upload to Azure Blob Storage
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
         run: |
-          aws s3 cp /tmp/imliti-${{ env.VERSION }}-macos.zip \
-            "s3://$S3_BUCKET/app/macos/imliti-${{ env.VERSION }}.zip" \
-            --region $AWS_REGION \
-            --content-type "application/zip"
+          az storage blob upload \
+            --account-name "$AZURE_STORAGE_ACCOUNT" \
+            --account-key "$AZURE_STORAGE_KEY" \
+            --container-name "$AZURE_CONTAINER" \
+            --name "macos/imliti-${{ env.VERSION }}.zip" \
+            --file /tmp/imliti-${{ env.VERSION }}-macos.zip \
+            --content-type "application/zip" \
+            --overwrite
 
       - name: Output download URL
         run: |
           echo "### ✅ macOS build uploaded" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Version:** ${{ env.VERSION }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Size:** $ZIP_SIZE" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **URL:** https://$S3_BUCKET.s3.$AWS_REGION.amazonaws.com/app/macos/imliti-${{ env.VERSION }}.zip" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **URL:** $BLOB_BASE_URL/macos/imliti-${{ env.VERSION }}.zip" >> "$GITHUB_STEP_SUMMARY"
 
   # ═════════════════════════════════════════════════════════════════════════════
   #  Windows build
@@ -191,31 +195,38 @@ jobs:
           echo "SETUP_PATH=$setupPath" >> $env:GITHUB_ENV
           echo "SETUP_SIZE=${sizeMB}MB" >> $env:GITHUB_ENV
 
-      - name: Upload to S3
+      - name: Upload to Azure Blob Storage
         shell: bash
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
         run: |
           # Upload ZIP for auto-updater
-          aws s3 cp "$ZIP_PATH" \
-            "s3://$S3_BUCKET/app/windows/imliti-${{ env.VERSION }}.zip" \
-            --region $AWS_REGION \
-            --content-type "application/zip"
+          az storage blob upload \
+            --account-name "$AZURE_STORAGE_ACCOUNT" \
+            --account-key "$AZURE_STORAGE_KEY" \
+            --container-name "$AZURE_CONTAINER" \
+            --name "windows/imliti-${{ env.VERSION }}.zip" \
+            --file "$ZIP_PATH" \
+            --content-type "application/zip" \
+            --overwrite
 
           # Upload EXE Installer
-          aws s3 cp "$SETUP_PATH" \
-            "s3://$S3_BUCKET/app/windows/imliti-${{ env.VERSION }}-setup.exe" \
-            --region $AWS_REGION \
-            --content-type "application/octet-stream"
+          az storage blob upload \
+            --account-name "$AZURE_STORAGE_ACCOUNT" \
+            --account-key "$AZURE_STORAGE_KEY" \
+            --container-name "$AZURE_CONTAINER" \
+            --name "windows/imliti-${{ env.VERSION }}-setup.exe" \
+            --file "$SETUP_PATH" \
+            --content-type "application/octet-stream" \
+            --overwrite
 
       - name: Output download URL
         shell: bash
         run: |
           echo "### ✅ Windows build uploaded" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Version:** ${{ env.VERSION }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Installer EXE:** https://$S3_BUCKET.s3.$AWS_REGION.amazonaws.com/app/windows/imliti-${{ env.VERSION }}-setup.exe ($SETUP_SIZE)" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Auto-update ZIP:** https://$S3_BUCKET.s3.$AWS_REGION.amazonaws.com/app/windows/imliti-${{ env.VERSION }}.zip ($ZIP_SIZE)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Installer EXE:** $BLOB_BASE_URL/windows/imliti-${{ env.VERSION }}-setup.exe ($SETUP_SIZE)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Auto-update ZIP:** $BLOB_BASE_URL/windows/imliti-${{ env.VERSION }}.zip ($ZIP_SIZE)" >> "$GITHUB_STEP_SUMMARY"
 
   # ═════════════════════════════════════════════════════════════════════════════
   #  Update latest.json manifest (runs after both builds succeed)
@@ -223,32 +234,43 @@ jobs:
   update-manifest:
     runs-on: ubuntu-latest
     needs: [build-macos, build-windows]
+    env:
+      VERSION: ${{ needs.build-macos.outputs.version }}
     steps:
       - name: Update latest.json
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          VERSION: ${{ needs.build-macos.outputs.version }}
+          AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
         run: |
-          MANIFEST_KEY="app/latest.json"
-          EXISTING=$(aws s3 cp "s3://$S3_BUCKET/$MANIFEST_KEY" - --region $AWS_REGION 2>/dev/null || echo '{}')
+          # Fetch existing manifest to preserve notes
+          EXISTING=$(az storage blob download \
+            --account-name "$AZURE_STORAGE_ACCOUNT" \
+            --account-key "$AZURE_STORAGE_KEY" \
+            --container-name "$AZURE_CONTAINER" \
+            --name "latest.json" \
+            --file /tmp/existing_manifest.json 2>/dev/null && cat /tmp/existing_manifest.json || echo '{}')
           NOTES=$(echo "$EXISTING" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('notes',''))" 2>/dev/null || echo "")
 
           NEW_MANIFEST=$(python3 - <<PYEOF
           import json
           manifest = {
-              "version": "${{ env.VERSION }}",
+              "version": "$VERSION",
               "notes": "${NOTES}",
-              "macos": "https://${{ env.S3_BUCKET }}.s3.${{ env.AWS_REGION }}.amazonaws.com/app/macos/imliti-${{ env.VERSION }}.zip",
-              "windows": "https://${{ env.S3_BUCKET }}.s3.${{ env.AWS_REGION }}.amazonaws.com/app/windows/imliti-${{ env.VERSION }}-setup.exe",
+              "macos": "$BLOB_BASE_URL/macos/imliti-$VERSION.zip",
+              "windows": "$BLOB_BASE_URL/windows/imliti-$VERSION-setup.exe",
           }
           print(json.dumps(manifest, indent=2))
           PYEOF
           )
 
-          echo "$NEW_MANIFEST" | aws s3 cp - "s3://$S3_BUCKET/$MANIFEST_KEY" \
-            --region $AWS_REGION \
-            --content-type "application/json"
+          echo "$NEW_MANIFEST" > /tmp/latest.json
+          az storage blob upload \
+            --account-name "$AZURE_STORAGE_ACCOUNT" \
+            --account-key "$AZURE_STORAGE_KEY" \
+            --container-name "$AZURE_CONTAINER" \
+            --name "latest.json" \
+            --file /tmp/latest.json \
+            --content-type "application/json" \
+            --overwrite
 
           echo "### 📋 Manifest updated" >> "$GITHUB_STEP_SUMMARY"
           echo '```json' >> "$GITHUB_STEP_SUMMARY"

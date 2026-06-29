@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
-const _base = 'https://rm0vk0iw4f.execute-api.eu-west-3.amazonaws.com/prod';
+const _base = 'https://imliti-api.icyplant-2cc88c2d.northeurope.azurecontainerapps.io';
 const _keyAccess  = 'access_token';
 const _keyRefresh = 'refresh_token';
 const _keyUser    = 'user_json';

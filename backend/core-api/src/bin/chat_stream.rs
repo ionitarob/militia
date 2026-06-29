@@ -1,5 +1,6 @@
-/// Streaming chat Lambda — served via Lambda Function URL (RESPONSE_STREAM mode).
-/// Bypasses API Gateway's 29-second limit and streams Bedrock tokens as SSE.
+/// Streaming chat — served as an HTTP endpoint on Azure Container Apps.
+/// Replaces the Lambda Function URL (RESPONSE_STREAM) pattern.
+/// Streams Anthropic API SSE tokens as SSE to the client.
 ///
 /// SSE protocol:
 ///   data: {"session_id":"<uuid>"}\n\n     ← first event, always
@@ -7,24 +8,22 @@
 ///   data: [DONE]\n\n                       ← stream end
 use std::sync::Arc;
 
-use aws_sdk_bedrockruntime::primitives::Blob;
-use aws_sdk_bedrockruntime::types::ResponseStream;
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use axum::{body::to_bytes, extract::State, routing::post, Router};
 use bytes::Bytes;
 use core_api::{
-    build_pool, fetch_secret_string,
+    build_blob_client, build_pool,
     routes::chat::{
-        create_session, execute_tool, fetch_licitacion_docs, follow_pdf_links,
-        invoke_scraper_fetch_for_licitacion, is_ppt_doc, load_history, save_message,
-        tool_defs, DocBlob, MODEL_ID, SYSTEM_PROMPT,
+        create_session, docs_to_text_block, execute_tool, fetch_licitacion_docs, follow_pdf_links,
+        invoke_scraper_fetch_for_licitacion, is_ppt_doc, load_history, openai_url, save_message,
+        tool_defs, SYSTEM_PROMPT,
     },
     AppState,
 };
 use futures_util::StreamExt;
-use http::Response;
+use http::{Request, Response};
 use http_body_util::{BodyExt, StreamBody};
 use http_body::Frame;
-use lambda_http::{run_with_streaming_response, service_fn, Body, Request};
+use lambda_http::Body as LambdaBody;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -39,58 +38,91 @@ struct ChatRequest {
     licitacion_id: Option<i64>,
 }
 
-// ── Entrypoint ────────────────────────────────────────────────────────────────
-
 #[tokio::main]
-async fn main() -> Result<(), Error> {
+async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .json()
         .without_time()
         .init();
 
-    let aws_cfg = aws_config::load_from_env().await;
-    let sm = aws_sdk_secretsmanager::Client::new(&aws_cfg);
+    let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL required");
+    let pool = build_pool(&db_url).await.expect("DB pool failed");
 
-    let pool = build_pool(&sm).await?;
+    let jwt_secret  = std::env::var("JWT_SECRET").expect("JWT_SECRET required");
+    let blob_account   = std::env::var("AZURE_STORAGE_ACCOUNT").expect("AZURE_STORAGE_ACCOUNT required");
+    let blob_key_env   = std::env::var("AZURE_STORAGE_KEY").expect("AZURE_STORAGE_KEY required");
+    let blob_container = std::env::var("AZURE_BLOB_CONTAINER").unwrap_or_else(|_| "documents".to_string());
+    let azure_openai_key      = std::env::var("AZURE_OPENAI_KEY").expect("AZURE_OPENAI_KEY required");
+    let azure_openai_endpoint = std::env::var("AZURE_OPENAI_ENDPOINT").expect("AZURE_OPENAI_ENDPOINT required");
+    let scraper_fetch_url = std::env::var("SCRAPER_FETCH_URL").ok();
 
-    let jwt_secret_arn = std::env::var("JWT_SECRET_ARN").expect("JWT_SECRET_ARN required");
-    let jwt_secret = fetch_secret_string(&sm, &jwt_secret_arn).await?;
-
-    let s3_bucket = std::env::var("S3_BUCKET").expect("S3_BUCKET required");
-    let scraper_fetch_arn = std::env::var("SCRAPER_FETCH_ARN").ok();
-    let s3_client = aws_sdk_s3::Client::new(&aws_cfg);
-    let bedrock = aws_sdk_bedrockruntime::Client::new(&aws_cfg);
-    let lambda_client = aws_sdk_lambda::Client::new(&aws_cfg);
+    let blob_client = build_blob_client(&blob_account, &blob_key_env);
+    let http_client = reqwest::Client::new();
 
     let state = Arc::new(AppState {
         pool,
         jwt_secret,
         smtp_user: String::new(),
         smtp_pass: String::new(),
-        s3_client,
-        s3_bucket,
-        bedrock,
+        blob_client,
+        blob_container,
+        http_client,
+        azure_openai_key,
+        azure_openai_endpoint,
+        scraper_fetch_url,
     });
 
-    run_with_streaming_response(service_fn(move |req: Request| {
-        let state = Arc::clone(&state);
-        let lambda_client = lambda_client.clone();
-        let scraper_fetch_arn = scraper_fetch_arn.clone();
-        async move { handle(state, lambda_client, scraper_fetch_arn, req).await }
-    }))
-    .await
+    let app = Router::new()
+        .route("/", post(handle_post))
+        .with_state(state);
+
+    let port = std::env::var("PORT").unwrap_or_else(|_| "8082".to_string());
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port))
+        .await
+        .expect("bind failed");
+
+    tracing::info!(port, "chat-stream listening");
+    axum::serve(listener, app).await.unwrap();
 }
 
-// ── Handler ───────────────────────────────────────────────────────────────────
+async fn handle_post(
+    State(state): State<Arc<AppState>>,
+    axum_req: axum::extract::Request,
+) -> impl axum::response::IntoResponse {
+    let (parts, body) = axum_req.into_parts();
+    let body_bytes: Bytes = to_bytes(body, 10 * 1024 * 1024).await.unwrap_or_default();
+    let lambda_body = if body_bytes.is_empty() { LambdaBody::Empty } else { LambdaBody::Binary(body_bytes.to_vec()) };
+
+    let mut req_builder = Request::builder().method(parts.method).uri(parts.uri);
+    for (name, val) in &parts.headers { req_builder = req_builder.header(name, val); }
+    let lambda_req = req_builder.body(lambda_body).unwrap();
+
+    match handle(state, lambda_req).await {
+        Ok(resp) => {
+            let (rp, rb) = resp.into_parts();
+            let mut builder = http::Response::builder().status(rp.status);
+            for (n, v) in &rp.headers { builder = builder.header(n, v); }
+            builder = builder
+                .header("access-control-allow-origin", "*")
+                .header("access-control-allow-headers", "Authorization, Content-Type");
+            builder.body(axum::body::Body::new(rb)).unwrap()
+        }
+        Err(e) => {
+            http::Response::builder()
+                .status(500)
+                .header("content-type", "text/event-stream")
+                .header("access-control-allow-origin", "*")
+                .body(axum::body::Body::from(format!("data: {{\"error\":\"{e}\"}}\n\ndata: [DONE]\n\n")))
+                .unwrap()
+        }
+    }
+}
 
 async fn handle(
     state: Arc<AppState>,
-    lambda_client: aws_sdk_lambda::Client,
-    scraper_fetch_arn: Option<String>,
-    req: Request,
+    req: Request<LambdaBody>,
 ) -> Result<Response<BoxBody>, Error> {
-    // JWT auth
     let auth = req
         .headers()
         .get("authorization")
@@ -102,11 +134,10 @@ async fn handle(
         Err(_) => return sse_error("Unauthorized"),
     };
 
-    // Parse body
     let body_bytes = match req.body() {
-        Body::Text(s) => s.as_bytes().to_vec(),
-        Body::Binary(b) => b.clone(),
-        Body::Empty => return sse_error("empty body"),
+        LambdaBody::Text(s) => s.as_bytes().to_vec(),
+        LambdaBody::Binary(b) => b.clone(),
+        LambdaBody::Empty => return sse_error("empty body"),
     };
     let chat_req: ChatRequest = match serde_json::from_slice(&body_bytes) {
         Ok(r) => r,
@@ -116,7 +147,6 @@ async fn handle(
         return sse_error("message is empty");
     }
 
-    // Session
     let session_id = if let Some(sid) = &chat_req.session_id {
         match sid.parse::<uuid::Uuid>() {
             Ok(u) => {
@@ -136,35 +166,26 @@ async fn handle(
         create_session(&state.pool, claims.sub).await?
     };
 
-    // Build initial message list
     let mut messages = load_history(&state.pool, session_id).await?;
 
     if let Some(lic_id) = chat_req.licitacion_id {
         let mut docs = fetch_licitacion_docs(&state, lic_id).await;
 
-        // Lambda-to-Lambda fallback: fetch docs on-demand if none in DB
-        if let (true, Some(ref arn)) = (docs.is_empty(), &scraper_fetch_arn) {
-            docs = invoke_scraper_fetch_for_licitacion(&state, &lambda_client, arn, lic_id).await;
+        if let (true, Some(ref url)) = (docs.is_empty(), &state.scraper_fetch_url) {
+            docs = invoke_scraper_fetch_for_licitacion(&state, url, lic_id).await;
         }
 
-        // PDF hyperlink following: if PPT missing, scan embedded links
-        if let (false, Some(ref arn)) = (docs.iter().any(|d| is_ppt_doc(&d.nombre)), &scraper_fetch_arn) {
-            let linked = follow_pdf_links(&state, &lambda_client, arn, &docs, lic_id).await;
+        if let (false, Some(ref url)) = (docs.iter().any(|d| is_ppt_doc(&d.nombre)), &state.scraper_fetch_url) {
+            let linked = follow_pdf_links(&state, url, &docs, lic_id).await;
             if !linked.is_empty() {
                 docs.extend(linked);
             }
         }
 
-        if !docs.is_empty() {
-            let mut content: Vec<serde_json::Value> = docs.into_iter().map(|d: DocBlob| {
-                serde_json::json!({
-                    "type": "document",
-                    "source": {"type": "base64", "media_type": d.media_type, "data": BASE64.encode(&d.data)},
-                    "title": d.nombre,
-                })
-            }).collect();
-            content.push(serde_json::json!({"type": "text", "text": chat_req.message.trim()}));
-            messages.push(serde_json::json!({"role": "user", "content": content}));
+        let doc_text = docs_to_text_block(&docs);
+        if let Some(text_block) = doc_text {
+            let combined = format!("{}\n\n---\n\n{}", text_block, chat_req.message.trim());
+            messages.push(serde_json::json!({"role": "user", "content": combined}));
         } else {
             messages.push(serde_json::json!({"role": "user", "content": chat_req.message}));
         }
@@ -172,12 +193,10 @@ async fn handle(
         messages.push(serde_json::json!({"role": "user", "content": chat_req.message}));
     }
 
-    // Channel: background task → SSE body
     let (tx, rx) = mpsc::channel::<Bytes>(128);
     let user_message = chat_req.message.clone();
 
     tokio::spawn(async move {
-        // First event: session_id so Flutter can persist it
         let _ = tx
             .send(sse_bytes(&format!(r#"{{"session_id":"{}"}}"#, session_id)))
             .await;
@@ -213,230 +232,121 @@ async fn handle(
         .unwrap())
 }
 
-// ── Streaming agentic loop ────────────────────────────────────────────────────
+// ── Azure OpenAI streaming agentic loop ───────────────────────────────────────
 
 async fn stream_chat(
     state: &AppState,
     tx: &mpsc::Sender<Bytes>,
     messages: &mut Vec<serde_json::Value>,
 ) -> Result<String, Error> {
-    for round in 0..3_u8 {
+    let url = openai_url(&state.azure_openai_endpoint);
+
+    for _ in 0..3_u8 {
+        let mut openai_msgs = vec![serde_json::json!({"role": "system", "content": SYSTEM_PROMPT})];
+        openai_msgs.extend(messages.iter().cloned());
+
         let request = serde_json::json!({
-            "anthropic_version": "bedrock-2023-05-31",
+            "messages": openai_msgs,
             "max_tokens": 4096,
-            "system": SYSTEM_PROMPT,
-            "messages": messages,
             "tools": tool_defs(),
+            "tool_choice": "auto",
+            "stream": true,
         });
-        let body_bytes = serde_json::to_vec(&request)?;
 
-        if round == 0 {
-            let streamed = invoke_streaming(state, tx, messages, body_bytes).await;
-            match streamed {
-                Ok(reply) => return Ok(reply),
-                Err(ref e) if e.to_string() == "tool_use" => {}
-                Err(e) => return Err(e),
-            }
-        } else {
-            // Subsequent rounds: buffered call to handle tools
-            let resp = state
-                .bedrock
-                .invoke_model()
-                .model_id(MODEL_ID)
-                .content_type("application/json")
-                .accept("application/json")
-                .body(Blob::new(body_bytes))
-                .send()
-                .await
-                .map_err(|e| format!("bedrock invoke: {e}"))?;
+        let resp = state.http_client
+            .post(&url)
+            .header("api-key", &state.azure_openai_key)
+            .header("content-type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| format!("openai stream: {e}"))?;
 
-            let resp_json: serde_json::Value = serde_json::from_slice(resp.body().as_ref())?;
-            let content = resp_json["content"].clone();
-            let stop_reason = resp_json["stop_reason"].as_str().unwrap_or("end_turn");
+        let mut byte_stream = resp.bytes_stream();
+        let mut buf = String::new();
+        let mut full_text = String::new();
+        let mut finish_reason = String::new();
+        let mut assistant_msg = serde_json::json!({"role": "assistant", "content": null});
 
-            messages.push(serde_json::json!({"role": "assistant", "content": content}));
+        // Accumulate tool call fragments: index → (id, name, arguments)
+        let mut tool_call_acc: std::collections::HashMap<usize, (String, String, String)> =
+            std::collections::HashMap::new();
 
-            if stop_reason != "tool_use" {
-                let text = content
-                    .as_array()
-                    .and_then(|a| a.iter().find(|b| b["type"] == "text"))
-                    .and_then(|b| b["text"].as_str())
-                    .unwrap_or("Sin respuesta disponible.")
-                    .to_string();
-                for word in text.split_inclusive(char::is_whitespace) {
+        while let Some(chunk) = byte_stream.next().await {
+            let chunk = chunk.map_err(|e| format!("stream read: {e}"))?;
+            buf.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(pos) = buf.find('\n') {
+                let line = buf[..pos].trim().to_string();
+                buf = buf[pos + 1..].to_string();
+
+                if !line.starts_with("data: ") { continue; }
+                let data = &line[6..];
+                if data == "[DONE]" { break; }
+
+                let Ok(json) = serde_json::from_str::<serde_json::Value>(data) else { continue };
+                let choice = &json["choices"][0];
+                let delta = &choice["delta"];
+
+                // Text token
+                if let Some(token) = delta["content"].as_str() {
+                    full_text.push_str(token);
                     let _ = tx.send(sse_bytes(&format!(
                         r#"{{"token":{}}}"#,
-                        serde_json::to_string(word).unwrap_or_default()
+                        serde_json::to_string(token).unwrap_or_default()
                     ))).await;
                 }
-                return Ok(text);
-            }
 
-            let empty = vec![];
-            let tool_blocks = content.as_array().unwrap_or(&empty);
-            let mut tool_results = vec![];
-            for block in tool_blocks {
-                if block["type"] != "tool_use" { continue; }
-                let use_id = block["id"].as_str().unwrap_or("");
-                let name = block["name"].as_str().unwrap_or("");
-                let input = &block["input"];
-                let result = execute_tool(&state.pool, name, input).await;
-                tool_results.push(serde_json::json!({
-                    "type": "tool_result",
-                    "tool_use_id": use_id,
+                // Tool call fragments
+                if let Some(tcs) = delta["tool_calls"].as_array() {
+                    for tc in tcs {
+                        let idx = tc["index"].as_u64().unwrap_or(0) as usize;
+                        let entry = tool_call_acc.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new()));
+                        if let Some(id) = tc["id"].as_str() { entry.0 = id.to_string(); }
+                        if let Some(name) = tc["function"]["name"].as_str() { entry.1 = name.to_string(); }
+                        if let Some(args) = tc["function"]["arguments"].as_str() { entry.2.push_str(args); }
+                    }
+                }
+
+                if let Some(fr) = choice["finish_reason"].as_str() {
+                    if !fr.is_empty() { finish_reason = fr.to_string(); }
+                }
+            }
+        }
+
+        if finish_reason == "tool_calls" {
+            // Build assistant message with tool_calls array
+            let mut tc_list: Vec<(usize, &(String, String, String))> = tool_call_acc.iter().map(|(k, v)| (*k, v)).collect();
+            tc_list.sort_by_key(|(i, _)| *i);
+            let tool_calls_json: Vec<serde_json::Value> = tc_list.iter().map(|(_, (id, name, args))| {
+                serde_json::json!({"id": id, "type": "function", "function": {"name": name, "arguments": args}})
+            }).collect();
+            assistant_msg = serde_json::json!({"role": "assistant", "content": null, "tool_calls": tool_calls_json});
+            messages.push(assistant_msg);
+
+            for (_, (id, name, args_str)) in &tc_list {
+                let args: serde_json::Value = serde_json::from_str(args_str).unwrap_or(serde_json::json!({}));
+                let result = execute_tool(&state.pool, name, &args).await;
+                messages.push(serde_json::json!({
+                    "role": "tool",
+                    "tool_call_id": id,
                     "content": result,
                 }));
             }
-            messages.push(serde_json::json!({"role": "user", "content": tool_results}));
+            continue;
         }
-    }
-    Err("bedrock loop exceeded max iterations".into())
-}
 
-async fn invoke_streaming(
-    state: &AppState,
-    tx: &mpsc::Sender<Bytes>,
-    messages: &mut Vec<serde_json::Value>,
-    body_bytes: Vec<u8>,
-) -> Result<String, Error> {
-    let resp = state
-        .bedrock
-        .invoke_model_with_response_stream()
-        .model_id(MODEL_ID)
-        .content_type("application/json")
-        .accept("application/json")
-        .body(Blob::new(body_bytes))
-        .send()
-        .await
-        .map_err(|e| format!("bedrock stream: {e}"))?;
-
-    let mut event_stream = resp.body;
-
-    let mut content_blocks: Vec<serde_json::Value> = Vec::new();
-    let mut current_type = String::new();
-    let mut current_id = String::new();
-    let mut current_name = String::new();
-    let mut current_text = String::new();
-    let mut current_input_json = String::new();
-    let mut current_index: i64 = -1;
-    let mut stop_reason = String::from("end_turn");
-    let mut full_text = String::new();
-
-    while let Ok(Some(event)) = event_stream.recv().await {
-        let ResponseStream::Chunk(chunk) = event else { continue };
-        let Some(bytes) = chunk.bytes else { continue };
-        let Ok(json) = serde_json::from_slice::<serde_json::Value>(bytes.as_ref()) else { continue };
-
-        match json["type"].as_str().unwrap_or("") {
-            "content_block_start" => {
-                let idx = json["index"].as_i64().unwrap_or(0);
-                if idx != current_index && current_index >= 0 {
-                    flush_block(&mut content_blocks, &current_type, &current_id, &current_name, &current_text, &current_input_json);
-                    current_text.clear();
-                    current_input_json.clear();
-                }
-                current_index = idx;
-                let cb = &json["content_block"];
-                current_type = cb["type"].as_str().unwrap_or("text").to_string();
-                current_id = cb["id"].as_str().unwrap_or("").to_string();
-                current_name = cb["name"].as_str().unwrap_or("").to_string();
-            }
-            "content_block_delta" => {
-                let delta = &json["delta"];
-                match delta["type"].as_str().unwrap_or("") {
-                    "text_delta" => {
-                        if let Some(t) = delta["text"].as_str() {
-                            current_text.push_str(t);
-                            full_text.push_str(t);
-                            let sse = sse_bytes(&format!(
-                                r#"{{"token":{}}}"#,
-                                serde_json::to_string(t).unwrap_or_default()
-                            ));
-                            let _ = tx.send(sse).await;
-                        }
-                    }
-                    "input_json_delta" => {
-                        if let Some(p) = delta["partial_json"].as_str() {
-                            current_input_json.push_str(p);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            "content_block_stop" => {
-                if current_index >= 0 {
-                    flush_block(&mut content_blocks, &current_type, &current_id, &current_name, &current_text, &current_input_json);
-                    current_text.clear();
-                    current_input_json.clear();
-                    current_index = -1;
-                }
-            }
-            "message_delta" => {
-                if let Some(r) = json["delta"]["stop_reason"].as_str() {
-                    stop_reason = r.to_string();
-                }
-            }
-            _ => {}
+        // Normal stop
+        assistant_msg["content"] = serde_json::json!(full_text);
+        messages.push(assistant_msg);
+        if full_text.is_empty() {
+            return Ok("Sin respuesta disponible.".to_string());
         }
+        return Ok(full_text);
     }
 
-    if current_index >= 0 && !current_type.is_empty() {
-        flush_block(&mut content_blocks, &current_type, &current_id, &current_name, &current_text, &current_input_json);
-    }
-
-    messages.push(serde_json::json!({"role": "assistant", "content": content_blocks}));
-
-    if stop_reason == "tool_use" {
-        let mut tool_results = vec![];
-        for block in &content_blocks {
-            if block["type"] != "tool_use" { continue; }
-            let use_id = block["id"].as_str().unwrap_or("");
-            let name = block["name"].as_str().unwrap_or("");
-            let input = &block["input"];
-            let result = execute_tool(&state.pool, name, input).await;
-            tool_results.push(serde_json::json!({
-                "type": "tool_result",
-                "tool_use_id": use_id,
-                "content": result,
-            }));
-        }
-        messages.push(serde_json::json!({"role": "user", "content": tool_results}));
-
-        let request = serde_json::json!({
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 4096,
-            "system": SYSTEM_PROMPT,
-            "messages": messages,
-            "tools": tool_defs(),
-        });
-        let new_body = serde_json::to_vec(&request)?;
-        return Box::pin(invoke_streaming(state, tx, messages, new_body)).await;
-    }
-
-    if full_text.is_empty() {
-        full_text = "Sin respuesta disponible.".to_string();
-    }
-    Ok(full_text)
+    Err("ai loop exceeded max iterations".into())
 }
-
-fn flush_block(
-    blocks: &mut Vec<serde_json::Value>,
-    block_type: &str,
-    id: &str,
-    name: &str,
-    text: &str,
-    input_json: &str,
-) {
-    let block = if block_type == "tool_use" {
-        let input: serde_json::Value = serde_json::from_str(input_json).unwrap_or(serde_json::json!({}));
-        serde_json::json!({"type": "tool_use", "id": id, "name": name, "input": input})
-    } else {
-        serde_json::json!({"type": "text", "text": text})
-    };
-    blocks.push(block);
-}
-
-// ── SSE helpers ───────────────────────────────────────────────────────────────
 
 fn sse_bytes(payload: &str) -> Bytes {
     Bytes::from(format!("data: {}\n\n", payload))

@@ -1,14 +1,12 @@
 use std::sync::Arc;
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use lambda_http::{Body, Error, Request, Response};
 use serde::Deserialize;
-use aws_sdk_bedrockruntime::primitives::Blob;
-use aws_sdk_lambda::primitives::Blob as LambdaBlob;
 
 use crate::AppState;
 use crate::routes::pipeline::require_auth;
 
-pub const MODEL_ID: &str = "eu.anthropic.claude-sonnet-4-6";
+pub const MODEL_ID: &str = "gpt-5-mini";
+const API_VERSION: &str = "2024-12-01-preview";
 pub const MAX_HISTORY: i64 = 20;
 pub const MAX_DOC_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_DOCS: usize = 5;
@@ -85,10 +83,10 @@ pub async fn fetch_licitacion_docs_limited(
         }
     }
 
-    let futures: Vec<_> = keys.into_iter().map(|(nombre, s3_key, ct)| {
-        let s3_client = state.s3_client.clone();
-        let s3_bucket = state.s3_bucket.clone();
-        async move { download_s3_doc_owned(s3_client, s3_bucket, s3_key, nombre, ct, max_bytes).await }
+    let futures: Vec<_> = keys.into_iter().map(|(nombre, blob_key, ct)| {
+        let blob_client = state.blob_client.clone();
+        let container = state.blob_container.clone();
+        async move { download_blob_doc_owned(blob_client, container, blob_key, nombre, ct, max_bytes).await }
     }).collect();
 
     futures_util::future::join_all(futures)
@@ -131,9 +129,9 @@ pub async fn fetch_summary_docs(state: &AppState, licitacion_id: i64) -> Vec<Doc
             break;
         }
         let remaining_budget = TOTAL_BUDGET - total_bytes;
-        let blob = download_s3_doc_owned(
-            state.s3_client.clone(),
-            state.s3_bucket.clone(),
+        let blob = download_blob_doc_owned(
+            state.blob_client.clone(),
+            state.blob_container.clone(),
             s3_key,
             nombre,
             ct,
@@ -199,19 +197,19 @@ fn doc_summary_score(nombre: &str) -> u8 {
     4 // everything else
 }
 
-async fn download_s3_doc_owned(
-    s3_client: aws_sdk_s3::Client,
-    s3_bucket: String,
-    s3_key: String,
+async fn download_blob_doc_owned(
+    blob_client: azure_storage_blobs::prelude::BlobServiceClient,
+    container: String,
+    blob_key: String,
     nombre: String,
     content_type: Option<String>,
     max_bytes: usize,
 ) -> Option<DocBlob> {
     let media_type = resolve_media_type(content_type.as_deref(), &nombre);
-    let output = s3_client.get_object().bucket(&s3_bucket).key(&s3_key).send().await.ok()?;
-    let bytes = output.body.collect().await.ok()?.into_bytes();
-    if bytes.len() > max_bytes { return None; }
-    Some(DocBlob { nombre, media_type: media_type.to_string(), data: bytes.to_vec() })
+    let blob = blob_client.container_client(&container).blob_client(&blob_key);
+    let data = blob.get_content().await.ok()?;
+    if data.len() > max_bytes { return None; }
+    Some(DocBlob { nombre, media_type: media_type.to_string(), data })
 }
 
 pub fn resolve_media_type<'a>(content_type: Option<&'a str>, nombre: &str) -> &'a str {
@@ -237,12 +235,12 @@ pub fn resolve_media_type<'a>(content_type: Option<&'a str>, nombre: &str) -> &'
     }
 }
 
-pub async fn download_s3_doc(state: &AppState, s3_key: &str, nombre: &str, content_type: Option<&str>) -> Option<DocBlob> {
+pub async fn download_blob_doc(state: &AppState, blob_key: &str, nombre: &str, content_type: Option<&str>) -> Option<DocBlob> {
     let media_type = resolve_media_type(content_type, nombre);
-    let output = state.s3_client.get_object().bucket(&state.s3_bucket).key(s3_key).send().await.ok()?;
-    let bytes = output.body.collect().await.ok()?.into_bytes();
-    if bytes.len() > MAX_DOC_BYTES { return None; }
-    Some(DocBlob { nombre: nombre.to_string(), media_type: media_type.to_string(), data: bytes.to_vec() })
+    let blob = state.blob_client.container_client(&state.blob_container).blob_client(blob_key);
+    let data = blob.get_content().await.ok()?;
+    if data.len() > MAX_DOC_BYTES { return None; }
+    Some(DocBlob { nombre: nombre.to_string(), media_type: media_type.to_string(), data })
 }
 
 // ── Lambda-to-Lambda document fallback ───────────────────────────────────────
@@ -292,12 +290,11 @@ pub fn extract_pdf_urls(data: &[u8]) -> Vec<String> {
     urls
 }
 
-/// Invoke scraper_fetch `fetch_document` mode to scrape the portal page for a licitacion
+/// Call scraper_fetch HTTP service `fetch_document` mode to scrape the portal for a licitacion
 /// on-demand and return the downloaded docs. Used when no docs are in the DB yet.
 pub async fn invoke_scraper_fetch_for_licitacion(
     state: &AppState,
-    lambda_client: &aws_sdk_lambda::Client,
-    scraper_fetch_arn: &str,
+    scraper_fetch_url: &str,
     licitacion_id: i64,
 ) -> Vec<DocBlob> {
     let external_id: Option<String> = sqlx::query_scalar(
@@ -317,45 +314,44 @@ pub async fn invoke_scraper_fetch_for_licitacion(
         }
     };
 
-    tracing::info!(licitacion_id, %external_id, "invoking scraper_fetch fetch_document");
+    tracing::info!(licitacion_id, %external_id, "calling scraper_fetch fetch_document");
 
     let payload = serde_json::json!({
         "mode": "fetch_document",
         "external_id": external_id,
         "licitacion_id": licitacion_id,
     });
-    let payload_bytes = match serde_json::to_vec(&payload) {
-        Ok(b) => b,
-        Err(e) => { tracing::warn!("serialize error: {e}"); return Vec::new(); }
-    };
 
-    let resp = lambda_client
-        .invoke()
-        .function_name(scraper_fetch_arn)
-        .invocation_type(aws_sdk_lambda::types::InvocationType::RequestResponse)
-        .payload(LambdaBlob::new(payload_bytes))
+    let resp = state.http_client
+        .post(scraper_fetch_url)
+        .json(&payload)
+        .timeout(std::time::Duration::from_secs(120))
         .send()
         .await;
 
     match resp {
-        Ok(r) if r.function_error().is_some() => {
-            tracing::warn!("scraper_fetch error: {:?}", r.function_error());
+        Ok(r) if r.status().is_success() => {
+            tracing::info!("scraper_fetch returned success");
+        }
+        Ok(r) => {
+            tracing::warn!(status = %r.status(), "scraper_fetch returned error");
             return Vec::new();
         }
-        Err(e) => { tracing::warn!("scraper_fetch invoke error: {e:?}"); return Vec::new(); }
-        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!("scraper_fetch call error: {e:?}");
+            return Vec::new();
+        }
     }
 
     // Docs are now in DB — re-run fetch
     fetch_licitacion_docs(state, licitacion_id).await
 }
 
-/// Scan every PDF in `docs` for embedded hyperlinks, invoke scraper_fetch for each URL,
+/// Scan every PDF in `docs` for embedded hyperlinks, call scraper_fetch for each URL,
 /// and return any newly-downloaded documents. Capped at 3 URLs.
 pub async fn follow_pdf_links(
     state: &AppState,
-    lambda_client: &aws_sdk_lambda::Client,
-    scraper_fetch_arn: &str,
+    scraper_fetch_url: &str,
     docs: &[DocBlob],
     licitacion_id: i64,
 ) -> Vec<DocBlob> {
@@ -388,31 +384,21 @@ pub async fn follow_pdf_links(
             "url": url,
             "licitacion_id": licitacion_id,
         });
-        let payload_bytes = match serde_json::to_vec(&payload) {
-            Ok(b) => b,
-            Err(_) => continue,
-        };
 
-        let resp = lambda_client
-            .invoke()
-            .function_name(scraper_fetch_arn)
-            .invocation_type(aws_sdk_lambda::types::InvocationType::RequestResponse)
-            .payload(LambdaBlob::new(payload_bytes))
+        let resp = state.http_client
+            .post(scraper_fetch_url)
+            .json(&payload)
+            .timeout(std::time::Duration::from_secs(120))
             .send()
             .await;
 
         let resp = match resp {
-            Ok(r) if r.function_error().is_none() => r,
-            Ok(r) => { tracing::warn!("scraper error: {:?}", r.function_error()); continue; }
-            Err(e) => { tracing::warn!("invoke error: {e:?}"); continue; }
+            Ok(r) if r.status().is_success() => r,
+            Ok(r) => { tracing::warn!(status = %r.status(), "scraper link error"); continue; }
+            Err(e) => { tracing::warn!("scraper link call error: {e:?}"); continue; }
         };
 
-        let body_bytes = match resp.payload() {
-            Some(b) => b.as_ref().to_vec(),
-            None => continue,
-        };
-
-        let result: serde_json::Value = match serde_json::from_slice(&body_bytes) {
+        let result: serde_json::Value = match resp.json().await {
             Ok(v) => v,
             Err(_) => continue,
         };
@@ -423,13 +409,13 @@ pub async fn follow_pdf_links(
         };
 
         for doc_info in documents {
-            let s3_key = match doc_info.get("s3_key").and_then(|v| v.as_str()) {
+            let blob_key = match doc_info.get("s3_key").and_then(|v| v.as_str()) {
                 Some(k) => k,
                 None => continue,
             };
             let nombre = doc_info.get("nombre").and_then(|v| v.as_str()).unwrap_or("Documento enlazado");
             let ct = doc_info.get("content_type").and_then(|v| v.as_str());
-            if let Some(blob) = download_s3_doc(state, s3_key, nombre, ct).await {
+            if let Some(blob) = download_blob_doc(state, blob_key, nombre, ct).await {
                 tracing::info!(nombre = %blob.nombre, bytes = blob.data.len(), "linked doc added");
                 linked_docs.push(blob);
             }
@@ -481,24 +467,13 @@ pub async fn send(state: Arc<AppState>, event: Request) -> Result<Response<Body>
     // Build message list (history + new user message)
     let mut messages = load_history(&state.pool, session_id).await?;
 
-    // If licitacion_id provided, fetch and embed documents (works on fresh sessions
-    // AND mid-session context switches when user navigates to a different licitacion)
+    // If licitacion_id provided, fetch docs and embed extracted text
     if let Some(lic_id) = req.licitacion_id {
         let docs = fetch_licitacion_docs(&state, lic_id).await;
-        if !docs.is_empty() {
-            let mut content: Vec<serde_json::Value> = docs.into_iter().map(|d| {
-                serde_json::json!({
-                    "type": "document",
-                    "source": {
-                        "type": "base64",
-                        "media_type": d.media_type,
-                        "data": BASE64.encode(&d.data),
-                    },
-                    "title": d.nombre,
-                })
-            }).collect();
-            content.push(serde_json::json!({"type": "text", "text": req.message.trim()}));
-            messages.push(serde_json::json!({"role": "user", "content": content}));
+        let doc_text = docs_to_text_block(&docs);
+        if let Some(text_block) = doc_text {
+            let combined = format!("{}\n\n---\n\n{}", text_block, req.message.trim());
+            messages.push(serde_json::json!({"role": "user", "content": combined}));
         } else {
             messages.push(serde_json::json!({"role": "user", "content": req.message}));
         }
@@ -523,132 +498,237 @@ pub async fn send(state: Arc<AppState>, event: Request) -> Result<Response<Body>
     }))?)
 }
 
-// ── Bedrock agentic loop ──────────────────────────────────────────────────────
+// ── Azure OpenAI agentic loop ─────────────────────────────────────────────────
+
+pub fn openai_url(endpoint: &str) -> String {
+    format!(
+        "{}openai/deployments/{}/chat/completions?api-version={}",
+        endpoint, MODEL_ID, API_VERSION
+    )
+}
 
 pub async fn bedrock_loop(
     state: &AppState,
     messages: &mut Vec<serde_json::Value>,
 ) -> Result<String, Error> {
+    let url = openai_url(&state.azure_openai_endpoint);
+
     for _ in 0..3 {
+        let mut openai_msgs = vec![serde_json::json!({"role": "system", "content": SYSTEM_PROMPT})];
+        openai_msgs.extend(messages.iter().cloned());
+
         let request = serde_json::json!({
-            "anthropic_version": "bedrock-2023-05-31",
+            "messages": openai_msgs,
             "max_tokens": 4096,
-            "system": SYSTEM_PROMPT,
-            "messages": messages,
             "tools": tool_defs(),
+            "tool_choice": "auto",
         });
 
-        let body_bytes = serde_json::to_vec(&request)
-            .map_err(|e| format!("json serialize: {e}"))?;
-
-        let resp = state.bedrock
-            .invoke_model()
-            .model_id(MODEL_ID)
-            .content_type("application/json")
-            .accept("application/json")
-            .body(Blob::new(body_bytes))
+        let resp = state.http_client
+            .post(&url)
+            .header("api-key", &state.azure_openai_key)
+            .header("content-type", "application/json")
+            .json(&request)
             .send()
             .await
-            .map_err(|e| format!("bedrock invoke: {e}"))?;
+            .map_err(|e| format!("openai call: {e}"))?;
 
-        let resp_json: serde_json::Value = serde_json::from_slice(resp.body().as_ref())
-            .map_err(|e| format!("bedrock parse: {e}"))?;
+        let resp_json: serde_json::Value = resp.json()
+            .await
+            .map_err(|e| format!("openai parse: {e}"))?;
 
-        let content = resp_json["content"].clone();
-        let stop_reason = resp_json["stop_reason"].as_str().unwrap_or("end_turn");
+        let choice = &resp_json["choices"][0];
+        let message = choice["message"].clone();
+        let finish_reason = choice["finish_reason"].as_str().unwrap_or("stop");
 
-        // Record assistant turn
-        messages.push(serde_json::json!({"role": "assistant", "content": content}));
+        messages.push(message.clone());
 
-        if stop_reason != "tool_use" {
-            // Extract the text reply
-            let text = content.as_array()
-                .and_then(|arr| arr.iter().find(|b| b["type"] == "text"))
-                .and_then(|b| b["text"].as_str())
+        if finish_reason != "tool_calls" {
+            let text = message["content"].as_str()
                 .unwrap_or("Sin respuesta disponible.")
                 .to_string();
             return Ok(text);
         }
 
         // Execute tool calls
-        let empty = vec![];
-        let tool_blocks = content.as_array().unwrap_or(&empty);
-        let mut tool_results: Vec<serde_json::Value> = Vec::new();
-
-        for block in tool_blocks {
-            if block["type"] != "tool_use" { continue; }
-            let use_id = block["id"].as_str().unwrap_or("");
-            let name   = block["name"].as_str().unwrap_or("");
-            let input  = &block["input"];
-            let result = execute_tool(&state.pool, name, input).await;
-            tool_results.push(serde_json::json!({
-                "type":        "tool_result",
-                "tool_use_id": use_id,
-                "content":     result,
+        let tool_calls = message["tool_calls"].as_array().cloned().unwrap_or_default();
+        for tc in &tool_calls {
+            let call_id = tc["id"].as_str().unwrap_or("");
+            let name = tc["function"]["name"].as_str().unwrap_or("");
+            let args: serde_json::Value = serde_json::from_str(
+                tc["function"]["arguments"].as_str().unwrap_or("{}")
+            ).unwrap_or(serde_json::json!({}));
+            let result = execute_tool(&state.pool, name, &args).await;
+            messages.push(serde_json::json!({
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": result,
             }));
         }
-
-        messages.push(serde_json::json!({"role": "user", "content": tool_results}));
     }
 
-    Err("bedrock loop exceeded max iterations".into())
+    Err("ai loop exceeded max iterations".into())
 }
 
-// ── Tool definitions (JSON schema) ───────────────────────────────────────────
+// ── Tool definitions (OpenAI function format) ─────────────────────────────────
 
 pub fn tool_defs() -> serde_json::Value {
     serde_json::json!([
         {
-            "name": "buscar_licitaciones",
-            "description": "Busca licitaciones públicas por texto, mercado, CC.AA, estado o importe.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "query":              {"type": "string",  "description": "Texto libre (título o expediente)"},
-                    "mercado":            {"type": "string",  "description": "Mercado vertical (ej: Telecom, Healthcare)"},
-                    "comunidad_autonoma": {"type": "string",  "description": "Comunidad autónoma (ej: Cataluña, Madrid)"},
-                    "estado":             {"type": "string",  "description": "activas | caducadas | todas (default: activas)"},
-                    "importe_max":        {"type": "number",  "description": "Importe máximo en euros"},
-                    "limit":              {"type": "integer", "description": "Resultados a devolver (máx 20)"}
-                },
-                "required": []
+            "type": "function",
+            "function": {
+                "name": "buscar_licitaciones",
+                "description": "Busca licitaciones públicas por texto, mercado, CC.AA, estado o importe.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query":              {"type": "string",  "description": "Texto libre (título o expediente)"},
+                        "mercado":            {"type": "string",  "description": "Mercado vertical (ej: Telecom, Healthcare)"},
+                        "comunidad_autonoma": {"type": "string",  "description": "Comunidad autónoma (ej: Cataluña, Madrid)"},
+                        "estado":             {"type": "string",  "description": "activas | caducadas | todas (default: activas)"},
+                        "importe_max":        {"type": "number",  "description": "Importe máximo en euros"},
+                        "limit":              {"type": "integer", "description": "Resultados a devolver (máx 20)"}
+                    },
+                    "required": []
+                }
             }
         },
         {
-            "name": "buscar_adjudicaciones",
-            "description": "Busca adjudicaciones por texto, mercado o rango de días recientes.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "query":        {"type": "string",  "description": "Texto libre (título)"},
-                    "mercado":      {"type": "string",  "description": "Mercado vertical"},
-                    "ultimos_dias": {"type": "integer", "description": "Filtrar últimos N días"},
-                    "limit":        {"type": "integer", "description": "Resultados a devolver (máx 20)"}
-                },
-                "required": []
+            "type": "function",
+            "function": {
+                "name": "buscar_adjudicaciones",
+                "description": "Busca adjudicaciones por texto, mercado o rango de días recientes.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query":        {"type": "string",  "description": "Texto libre (título)"},
+                        "mercado":      {"type": "string",  "description": "Mercado vertical"},
+                        "ultimos_dias": {"type": "integer", "description": "Filtrar últimos N días"},
+                        "limit":        {"type": "integer", "description": "Resultados a devolver (máx 20)"}
+                    },
+                    "required": []
+                }
             }
         },
         {
-            "name": "detalle_licitacion",
-            "description": "Obtiene todos los detalles de una licitación por número de expediente o título.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Número de expediente o parte del título"}
-                },
-                "required": ["query"]
+            "type": "function",
+            "function": {
+                "name": "detalle_licitacion",
+                "description": "Obtiene todos los detalles de una licitación por número de expediente o título.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Número de expediente o parte del título"}
+                    },
+                    "required": ["query"]
+                }
             }
         },
         {
-            "name": "estadisticas_pipeline",
-            "description": "Estadísticas generales: licitaciones activas/caducadas, adjudicaciones totales y recientes, distribución del pipeline.",
-            "input_schema": {
-                "type": "object",
-                "properties": {},
-                "required": []
+            "type": "function",
+            "function": {
+                "name": "estadisticas_pipeline",
+                "description": "Estadísticas generales: licitaciones activas/caducadas, adjudicaciones totales y recientes, distribución del pipeline.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
             }
         }
     ])
+}
+
+// ── Document text extraction ──────────────────────────────────────────────────
+
+const TEXT_CAP: usize = 80_000;
+
+pub fn docs_to_text_block(docs: &[DocBlob]) -> Option<String> {
+    let parts: Vec<String> = docs.iter().filter_map(|d| {
+        let text = extract_doc_text(d)?;
+        Some(format!("=== {} ===\n\n{}", d.nombre, text))
+    }).collect();
+    if parts.is_empty() { None } else { Some(parts.join("\n\n---\n\n")) }
+}
+
+pub fn extract_doc_text(doc: &DocBlob) -> Option<String> {
+    let mt = doc.media_type.as_str();
+    let raw = if mt.contains("pdf") {
+        extract_pdf_text(&doc.data)
+    } else if mt.contains("opendocument.text") || mt.contains("odt") {
+        extract_zip_xml_text(&doc.data, "content.xml")
+    } else if mt.contains("openxmlformats") && mt.contains("word") {
+        extract_zip_xml_text(&doc.data, "word/document.xml")
+    } else if mt.contains("msword") {
+        extract_binary_text(&doc.data)
+    } else if mt.contains("text/plain") {
+        std::str::from_utf8(&doc.data).ok().map(|s| s.trim().to_string())
+    } else {
+        extract_pdf_text(&doc.data)
+            .or_else(|| extract_zip_xml_text(&doc.data, "content.xml"))
+            .or_else(|| extract_zip_xml_text(&doc.data, "word/document.xml"))
+    };
+    let text = raw?;
+    if text.trim().is_empty() { return None; }
+    if text.len() > TEXT_CAP { Some(text[..TEXT_CAP].to_string()) } else { Some(text) }
+}
+
+pub fn extract_pdf_text(data: &[u8]) -> Option<String> {
+    let result = std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem(data));
+    match result {
+        Ok(Ok(t)) if !t.trim().is_empty() => Some(t),
+        _ => None,
+    }
+}
+
+pub fn extract_zip_xml_text(data: &[u8], entry: &str) -> Option<String> {
+    let cursor = std::io::Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).ok()?;
+    let mut file = archive.by_name(entry).ok()?;
+    use std::io::Read;
+    let mut xml = String::new();
+    file.read_to_string(&mut xml).ok()?;
+    let text = strip_xml_tags(&xml);
+    if text.trim().is_empty() { None } else { Some(text) }
+}
+
+pub fn extract_binary_text(data: &[u8]) -> Option<String> {
+    let mut out = String::new();
+    let mut run = String::new();
+    for &b in data {
+        if b >= 0x20 && b < 0x7f || b >= 0xa0 {
+            run.push(b as char);
+        } else {
+            if run.len() >= 5 {
+                if !out.is_empty() { out.push(' '); }
+                out.push_str(run.trim());
+            }
+            run.clear();
+        }
+    }
+    if run.len() >= 5 { out.push_str(run.trim()); }
+    if out.trim().is_empty() { None } else { Some(out) }
+}
+
+pub fn strip_xml_tags(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() / 2);
+    let mut in_tag = false;
+    let mut last_space = true;
+    for c in s.chars() {
+        match c {
+            '<' => { in_tag = true; }
+            '>' => {
+                in_tag = false;
+                if !last_space { out.push(' '); last_space = true; }
+            }
+            _ if in_tag => {}
+            '\n' | '\r' | '\t' | ' ' => {
+                if !last_space { out.push(' '); last_space = true; }
+            }
+            _ => { out.push(c); last_space = false; }
+        }
+    }
+    out.trim().to_string()
 }
 
 // ── Tool executors ────────────────────────────────────────────────────────────

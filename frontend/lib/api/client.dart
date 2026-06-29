@@ -3,11 +3,11 @@ import 'package:http/http.dart' as http;
 import '../services/auth_service.dart';
 import 'models.dart';
 
-const _base = 'https://rm0vk0iw4f.execute-api.eu-west-3.amazonaws.com/prod';
+const _base = 'https://imliti-api.icyplant-2cc88c2d.northeurope.azurecontainerapps.io';
 
-const chatStreamBase = 'https://n52c2kqdmznr5vlqkgiiuufk6e0qjubr.lambda-url.eu-west-3.on.aws';
+const chatStreamBase = 'https://imliti-chat.icyplant-2cc88c2d.northeurope.azurecontainerapps.io';
 
-const summarizeBase = 'https://aqwv7iupruihcwhswkuzp45jsm0anhvi.lambda-url.eu-west-3.on.aws';
+const summarizeBase = 'https://imliti-summarize.icyplant-2cc88c2d.northeurope.azurecontainerapps.io';
 
 class ApiClient {
   static final ApiClient _instance = ApiClient._();

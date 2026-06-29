@@ -16,9 +16,9 @@ name = "summarize"
 path = "src/bin/summarize.rs"
 
 [dependencies]
-# Lambda runtime
+# HTTP server (replaces lambda_http runtime — kept for Request/Response/Body types)
+axum = { version = "0.7", features = ["macros"] }
 lambda_http = "0.13"
-lambda_runtime = "0.13"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures-util = "0.3"
@@ -30,12 +30,16 @@ bytes = "1"
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "migrate", "chrono", "uuid"] }
 
-# AWS SDK
-aws-config = { version = "1", features = ["behavior-version-latest"] }
-aws-sdk-secretsmanager = "1"
-aws-sdk-s3 = "1"
-aws-sdk-bedrockruntime = "1"
-aws-sdk-lambda = "1"
+# Azure Blob Storage
+azure_storage = "0.20"
+azure_storage_blobs = "0.20"
+azure_core = "0.20"
+time = { version = "0.3", features = ["formatting"] }
+
+# HTTP client (Anthropic API + scraper HTTP calls)
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# Email
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder"] }
 
 # Serialisation
