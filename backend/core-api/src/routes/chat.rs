@@ -54,10 +54,11 @@ pub async fn fetch_licitacion_docs_limited(
     max_docs: usize,
     max_bytes: usize,
 ) -> Vec<DocBlob> {
-    let mut keys: Vec<(String, String, Option<String>)> = Vec::new();
+    // (nombre, blob_key, content_type, source_url)
+    let mut keys: Vec<(String, String, Option<String>, Option<String>)> = Vec::new();
 
-    if let Ok(rows) = sqlx::query_as::<_, (String, String, Option<String>)>(
-        "SELECT nombre, s3_key, content_type FROM licitacion_documento \
+    if let Ok(rows) = sqlx::query_as::<_, (String, String, Option<String>, Option<String>)>(
+        "SELECT nombre, s3_key, content_type, source_url FROM licitacion_documento \
          WHERE licitacion_id = $1 ORDER BY id ASC LIMIT $2",
     )
     .bind(licitacion_id as i32)
@@ -79,14 +80,17 @@ pub async fn fetch_licitacion_docs_limited(
         .fetch_all(&state.pool)
         .await
         {
-            keys.extend(rows);
+            keys.extend(rows.into_iter().map(|(n, k, ct)| (n, k, ct, None)));
         }
     }
 
-    let futures: Vec<_> = keys.into_iter().map(|(nombre, blob_key, ct)| {
+    let futures: Vec<_> = keys.into_iter().map(|(nombre, blob_key, ct, source_url)| {
         let blob_client = state.blob_client.clone();
         let container = state.blob_container.clone();
-        async move { download_blob_doc_owned(blob_client, container, blob_key, nombre, ct, max_bytes).await }
+        let http_client = state.http_client.clone();
+        async move {
+            download_blob_doc_owned(blob_client, container, blob_key, nombre, ct, max_bytes, http_client, source_url).await
+        }
     }).collect();
 
     futures_util::future::join_all(futures)
@@ -104,9 +108,9 @@ pub async fn fetch_summary_docs(state: &AppState, licitacion_id: i64) -> Vec<Doc
     const MAX_SUMMARY_DOCS: usize = 3;
 
     // Fetch all portal doc metadata (no LIMIT — we need to rank them all)
-    let mut candidates: Vec<(String, String, Option<String>)> = Vec::new();
-    if let Ok(rows) = sqlx::query_as::<_, (String, String, Option<String>)>(
-        "SELECT nombre, s3_key, content_type FROM licitacion_documento \
+    let mut candidates: Vec<(String, String, Option<String>, Option<String>)> = Vec::new();
+    if let Ok(rows) = sqlx::query_as::<_, (String, String, Option<String>, Option<String>)>(
+        "SELECT nombre, s3_key, content_type, source_url FROM licitacion_documento \
          WHERE licitacion_id = $1 ORDER BY id ASC",
     )
     .bind(licitacion_id as i32)
@@ -117,14 +121,14 @@ pub async fn fetch_summary_docs(state: &AppState, licitacion_id: i64) -> Vec<Doc
     }
 
     // Sort by priority (lower score = more useful for a summary)
-    candidates.sort_by_key(|(nombre, _, _)| doc_summary_score(nombre));
+    candidates.sort_by_key(|(nombre, _, _, _)| doc_summary_score(nombre));
 
     // Download in priority order, dedup by exact byte size, stop at budget
     let mut docs: Vec<DocBlob> = Vec::new();
     let mut seen_sizes = std::collections::HashSet::<usize>::new();
     let mut total_bytes = 0usize;
 
-    for (nombre, s3_key, ct) in candidates {
+    for (nombre, s3_key, ct, source_url) in candidates {
         if docs.len() >= MAX_SUMMARY_DOCS || total_bytes >= TOTAL_BUDGET {
             break;
         }
@@ -136,6 +140,8 @@ pub async fn fetch_summary_docs(state: &AppState, licitacion_id: i64) -> Vec<Doc
             nombre,
             ct,
             remaining_budget,
+            state.http_client.clone(),
+            source_url,
         )
         .await;
         if let Some(b) = blob {
@@ -204,12 +210,41 @@ async fn download_blob_doc_owned(
     nombre: String,
     content_type: Option<String>,
     max_bytes: usize,
+    http_client: reqwest::Client,
+    source_url: Option<String>,
 ) -> Option<DocBlob> {
     let media_type = resolve_media_type(content_type.as_deref(), &nombre);
+
+    // Primary: Azure Blob
     let blob = blob_client.container_client(&container).blob_client(&blob_key);
-    let data = blob.get_content().await.ok()?;
-    if data.len() > max_bytes { return None; }
-    Some(DocBlob { nombre, media_type: media_type.to_string(), data })
+    if let Ok(data) = blob.get_content().await {
+        if data.len() <= max_bytes {
+            return Some(DocBlob { nombre, media_type: media_type.to_string(), data });
+        }
+    }
+
+    // Fallback: download from the original portal source_url
+    if let Some(url) = source_url {
+        tracing::info!(nombre = %nombre, url = %url, "blob missing — fetching from source_url");
+        if let Ok(resp) = http_client
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .await
+        {
+            if resp.status().is_success() {
+                if let Ok(data) = resp.bytes().await {
+                    let data = data.to_vec();
+                    if !data.is_empty() && data.len() <= max_bytes {
+                        tracing::info!(nombre = %nombre, bytes = data.len(), "fetched from source_url");
+                        return Some(DocBlob { nombre, media_type: media_type.to_string(), data });
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
 pub fn resolve_media_type<'a>(content_type: Option<&'a str>, nombre: &str) -> &'a str {
@@ -351,11 +386,17 @@ pub async fn invoke_scraper_fetch_for_licitacion(
 /// and return any newly-downloaded documents. Capped at 3 URLs.
 pub async fn follow_pdf_links(
     state: &AppState,
-    scraper_fetch_url: &str,
+    _scraper_fetch_url: &str,
     docs: &[DocBlob],
-    licitacion_id: i64,
+    _licitacion_id: i64,
 ) -> Vec<DocBlob> {
+    follow_pdf_links_direct(state, docs).await
+}
+
+/// Download PDF hyperlinks directly via HTTP (no scraper needed).
+pub async fn follow_pdf_links_direct(state: &AppState, docs: &[DocBlob]) -> Vec<DocBlob> {
     const MAX_LINKED: usize = 3;
+    const MAX_BYTES: usize = 5 * 1024 * 1024;
 
     let mut all_urls: Vec<String> = Vec::new();
     let mut seen_urls = std::collections::HashSet::new();
@@ -378,48 +419,44 @@ pub async fn follow_pdf_links(
 
     let mut linked_docs = Vec::new();
     for url in &all_urls {
-        tracing::info!(%url, "fetching linked doc via scraper");
-        let payload = serde_json::json!({
-            "mode": "fetch_document_url",
-            "url": url,
-            "licitacion_id": licitacion_id,
-        });
-
-        let resp = state.http_client
-            .post(scraper_fetch_url)
-            .json(&payload)
-            .timeout(std::time::Duration::from_secs(120))
+        tracing::info!(%url, "fetching linked PDF directly");
+        let resp = match state.http_client
+            .get(url)
+            .timeout(std::time::Duration::from_secs(30))
             .send()
-            .await;
-
-        let resp = match resp {
+            .await
+        {
             Ok(r) if r.status().is_success() => r,
-            Ok(r) => { tracing::warn!(status = %r.status(), "scraper link error"); continue; }
-            Err(e) => { tracing::warn!("scraper link call error: {e:?}"); continue; }
+            Ok(r) => { tracing::warn!(status = %r.status(), url, "linked PDF fetch error"); continue; }
+            Err(e) => { tracing::warn!(url, "linked PDF fetch failed: {e:?}"); continue; }
         };
 
-        let result: serde_json::Value = match resp.json().await {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
+        let ct = resp.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/pdf")
+            .to_string();
 
-        let documents = match result.get("documents").and_then(|d| d.as_array()) {
-            Some(d) if !d.is_empty() => d,
-            _ => continue,
-        };
-
-        for doc_info in documents {
-            let blob_key = match doc_info.get("s3_key").and_then(|v| v.as_str()) {
-                Some(k) => k,
-                None => continue,
-            };
-            let nombre = doc_info.get("nombre").and_then(|v| v.as_str()).unwrap_or("Documento enlazado");
-            let ct = doc_info.get("content_type").and_then(|v| v.as_str());
-            if let Some(blob) = download_blob_doc(state, blob_key, nombre, ct).await {
-                tracing::info!(nombre = %blob.nombre, bytes = blob.data.len(), "linked doc added");
-                linked_docs.push(blob);
-            }
+        // Only accept PDF and common document types
+        if !ct.contains("pdf") && !ct.contains("word") && !ct.contains("opendocument") {
+            tracing::info!(url, ct, "skipping non-document linked URL");
+            continue;
         }
+
+        let data = match resp.bytes().await {
+            Ok(b) if b.len() <= MAX_BYTES => b.to_vec(),
+            Ok(b) => { tracing::warn!(url, bytes = b.len(), "linked PDF too large, skipping"); continue; }
+            Err(e) => { tracing::warn!(url, "linked PDF read error: {e:?}"); continue; }
+        };
+
+        let nombre = url.rsplit('/').next()
+            .and_then(|s| s.split('?').next())
+            .unwrap_or("Documento enlazado")
+            .to_string();
+        let media_type = resolve_media_type(Some(&ct), &nombre).to_string();
+
+        tracing::info!(nombre, bytes = data.len(), "linked doc added directly");
+        linked_docs.push(DocBlob { nombre, media_type, data });
     }
 
     linked_docs
@@ -513,13 +550,13 @@ pub async fn bedrock_loop(
 ) -> Result<String, Error> {
     let url = openai_url(&state.azure_openai_endpoint);
 
-    for _ in 0..3 {
+    for _ in 0..10 {
         let mut openai_msgs = vec![serde_json::json!({"role": "system", "content": SYSTEM_PROMPT})];
         openai_msgs.extend(messages.iter().cloned());
 
         let request = serde_json::json!({
             "messages": openai_msgs,
-            "max_tokens": 4096,
+            "max_completion_tokens": 16384,
             "tools": tool_defs(),
             "tool_choice": "auto",
         });
@@ -849,11 +886,11 @@ async fn tool_buscar_adjudicaciones(pool: &sqlx::PgPool, input: &serde_json::Val
 async fn tool_detalle_licitacion(pool: &sqlx::PgPool, input: &serde_json::Value) -> String {
     let query = input["query"].as_str().unwrap_or("");
     match sqlx::query(r#"
-        SELECT l.titulo, l.numero_expediente, l.descripcion,
+        SELECT l.titulo, l.numero_expediente,
                l.importe_licitacion, l.valor_estimado,
-               l.fecha_publicacion, l.fecha_limite_oferta, l.pipeline_stage,
+               l.fecha_limite_oferta, l.pipeline_stage,
                l.comunidad_autonoma, l.mercado_vertical, l.tipo_procedimiento,
-               l.tipo_tramitacion, l.duracion_meses, l.va_con_pliego,
+               l.tipo_tramitacion, l.duracion_meses,
                o.nombre AS organismo
         FROM licitacion l
         LEFT JOIN organismo o ON o.id = l.organismo_id
@@ -870,34 +907,28 @@ async fn tool_detalle_licitacion(pool: &sqlx::PgPool, input: &serde_json::Value)
             use sqlx::Row;
             let titulo:   String = r.try_get("titulo").unwrap_or_default();
             let exp:      String = r.try_get("numero_expediente").unwrap_or_default();
-            let desc:     Option<String> = r.try_get("descripcion").ok().flatten();
             let importe:  Option<f64>    = r.try_get("importe_licitacion").ok().flatten();
             let vest:     Option<f64>    = r.try_get("valor_estimado").ok().flatten();
-            let pub_d:    Option<chrono::NaiveDate> = r.try_get("fecha_publicacion").ok().flatten();
-            let dead:     Option<chrono::NaiveDate> = r.try_get("fecha_limite_oferta").ok().flatten();
+            let dead:     Option<chrono::DateTime<chrono::Utc>> = r.try_get("fecha_limite_oferta").ok().flatten();
             let stage:    Option<String> = r.try_get("pipeline_stage").ok().flatten();
             let ccaa:     Option<String> = r.try_get("comunidad_autonoma").ok().flatten();
             let mercado:  Option<String> = r.try_get("mercado_vertical").ok().flatten();
             let proc_t:   Option<String> = r.try_get("tipo_procedimiento").ok().flatten();
             let tram:     Option<String> = r.try_get("tipo_tramitacion").ok().flatten();
             let dur:      Option<i16>    = r.try_get("duracion_meses").ok().flatten();
-            let pliego:   Option<bool>   = r.try_get("va_con_pliego").ok().flatten();
             let org:      Option<String> = r.try_get("organismo").ok().flatten();
             format!(
-                "Título: {titulo}\nExpediente: {exp}\nOrganismo: {}\nImporte: {}\nValor estimado: {}\nPublicación: {}\nPlazo: {}\nStage: {}\nCC.AA: {}\nMercado: {}\nProcedimiento: {}\nTramitación: {}\nDuración: {} meses\nCon pliego: {}\nDescripción: {}",
+                "Título: {titulo}\nExpediente: {exp}\nOrganismo: {}\nImporte: {}\nValor estimado: {}\nPlazo: {}\nStage: {}\nCC.AA: {}\nMercado: {}\nProcedimiento: {}\nTramitación: {}\nDuración: {} meses",
                 org.as_deref().unwrap_or("-"),
                 importe.map(|v| format!("{:.0}€", v)).unwrap_or("-".into()),
                 vest.map(|v| format!("{:.0}€", v)).unwrap_or("-".into()),
-                pub_d.map(|d| d.to_string()).unwrap_or("-".into()),
-                dead.map(|d| d.to_string()).unwrap_or("-".into()),
+                dead.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or("-".into()),
                 stage.as_deref().unwrap_or("nueva"),
                 ccaa.as_deref().unwrap_or("-"),
                 mercado.as_deref().unwrap_or("-"),
                 proc_t.as_deref().unwrap_or("-"),
                 tram.as_deref().unwrap_or("-"),
                 dur.map(|d| d.to_string()).unwrap_or("-".into()),
-                pliego.map(|b| if b { "Sí" } else { "No" }).unwrap_or("-"),
-                desc.as_deref().unwrap_or("Sin descripción"),
             )
         }
     }

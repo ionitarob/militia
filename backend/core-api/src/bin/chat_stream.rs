@@ -13,9 +13,9 @@ use bytes::Bytes;
 use core_api::{
     build_blob_client, build_pool,
     routes::chat::{
-        create_session, docs_to_text_block, execute_tool, fetch_licitacion_docs, follow_pdf_links,
-        invoke_scraper_fetch_for_licitacion, is_ppt_doc, load_history, openai_url, save_message,
-        tool_defs, SYSTEM_PROMPT,
+        create_session, docs_to_text_block, execute_tool, fetch_licitacion_docs,
+        follow_pdf_links_direct, invoke_scraper_fetch_for_licitacion, is_ppt_doc, load_history,
+        openai_url, save_message, tool_defs, SYSTEM_PROMPT,
     },
     AppState,
 };
@@ -175,8 +175,8 @@ async fn handle(
             docs = invoke_scraper_fetch_for_licitacion(&state, url, lic_id).await;
         }
 
-        if let (false, Some(ref url)) = (docs.iter().any(|d| is_ppt_doc(&d.nombre)), &state.scraper_fetch_url) {
-            let linked = follow_pdf_links(&state, url, &docs, lic_id).await;
+        if !docs.iter().any(|d| is_ppt_doc(&d.nombre)) {
+            let linked = follow_pdf_links_direct(&state, &docs).await;
             if !linked.is_empty() {
                 docs.extend(linked);
             }
@@ -241,13 +241,13 @@ async fn stream_chat(
 ) -> Result<String, Error> {
     let url = openai_url(&state.azure_openai_endpoint);
 
-    for _ in 0..3_u8 {
+    for _ in 0..10_u8 {
         let mut openai_msgs = vec![serde_json::json!({"role": "system", "content": SYSTEM_PROMPT})];
         openai_msgs.extend(messages.iter().cloned());
 
         let request = serde_json::json!({
             "messages": openai_msgs,
-            "max_tokens": 4096,
+            "max_completion_tokens": 16384,
             "tools": tool_defs(),
             "tool_choice": "auto",
             "stream": true,

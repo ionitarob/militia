@@ -8,12 +8,12 @@ use bytes::Bytes;
 use core_api::{
     build_blob_client, build_pool,
     routes::chat::{
-        extract_doc_text, fetch_summary_docs, follow_pdf_links,
+        extract_doc_text, fetch_summary_docs, follow_pdf_links_direct,
         invoke_scraper_fetch_for_licitacion, is_ppt_doc, openai_url, DocBlob,
     },
     AppState,
 };
-use futures_util::StreamExt;
+use futures_util::StreamExt as _;
 use http::{Request, Response};
 use http_body_util::{BodyExt, StreamBody};
 use http_body::Frame;
@@ -163,10 +163,8 @@ async fn handle(
             ).await;
         }
 
-        if let (false, Some(ref url)) = (docs.iter().any(|d| is_ppt_doc(&d.nombre)), &state.scraper_fetch_url) {
-            let linked = follow_pdf_links(
-                &state, url, &docs, sum_req.licitacion_id,
-            ).await;
+        if !docs.iter().any(|d| is_ppt_doc(&d.nombre)) {
+            let linked = follow_pdf_links_direct(&state, &docs).await;
             if !linked.is_empty() {
                 tracing::info!(count = linked.len(), "appended docs found via PDF hyperlinks");
                 docs.extend(linked);
@@ -201,7 +199,8 @@ async fn handle(
         ];
         let request = serde_json::json!({
             "messages": messages,
-            "max_tokens": 1024,
+            "max_completion_tokens": 16384,
+            "stream": true,
         });
 
         match stream_summary(&state, &tx, request, sum_req.licitacion_id).await {
@@ -235,7 +234,7 @@ async fn stream_summary(
     request: serde_json::Value,
     licitacion_id: i64,
 ) -> Result<(), Error> {
-    tracing::info!("calling Azure OpenAI for summary");
+    tracing::info!("calling Azure OpenAI for summary (streaming)");
 
     let url = openai_url(&state.azure_openai_endpoint);
 
@@ -248,26 +247,36 @@ async fn stream_summary(
         .await
         .map_err(|e| format!("openai call: {e:?}"))?;
 
-    tracing::info!(status = %resp.status(), "Azure OpenAI responded");
+    tracing::info!(status = %resp.status(), "Azure OpenAI stream started");
 
-    let resp_json: serde_json::Value = resp.json()
-        .await
-        .map_err(|e| format!("openai parse: {e:?}"))?;
+    let mut byte_stream = resp.bytes_stream();
+    let mut buf = String::new();
+    let mut full_text = String::new();
 
-    let full_text = resp_json["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    while let Some(chunk) = byte_stream.next().await {
+        let chunk = chunk.map_err(|e| format!("stream read: {e}"))?;
+        buf.push_str(&String::from_utf8_lossy(&chunk));
 
-    tracing::info!(chars = full_text.len(), "got summary response");
+        while let Some(pos) = buf.find('\n') {
+            let line = buf[..pos].trim().to_string();
+            buf = buf[pos + 1..].to_string();
 
-    for word in full_text.split_inclusive(char::is_whitespace) {
-        let sse = sse_bytes(&format!(
-            r#"{{"token":{}}}"#,
-            serde_json::to_string(word).unwrap_or_default()
-        ));
-        let _ = tx.send(sse).await;
+            if !line.starts_with("data: ") { continue; }
+            let data = &line[6..];
+            if data == "[DONE]" { break; }
+
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(data) else { continue };
+            if let Some(token) = json["choices"][0]["delta"]["content"].as_str() {
+                full_text.push_str(token);
+                let _ = tx.send(sse_bytes(&format!(
+                    r#"{{"token":{}}}"#,
+                    serde_json::to_string(token).unwrap_or_default()
+                ))).await;
+            }
+        }
     }
+
+    tracing::info!(chars = full_text.len(), "summary stream complete");
 
     if !full_text.is_empty() {
         let _ = sqlx::query(
